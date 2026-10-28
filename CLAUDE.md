@@ -29,7 +29,17 @@ Lakehouse medalhão local sobre a base pública **Dunnhumby "The Complete Journe
 
 ## Comandos
 ```
-.\venv\Scripts\Activate.ps1          # ativar o ambiente
-pip install -r requirements.txt      # instalar dependências
+.\venv\Scripts\Activate.ps1                        # ativar o ambiente
+pip install -r requirements.txt                    # instalar dependências
+python -m src.bronze.ingest                        # carga da bronze (hoje, fuso de São Paulo); sai com 1 se alguma tabela falhar
+python -m src.bronze.ingest --data-carga 2026-10-28  # grava numa data escolhida (reprocesso)
+python scripts/espiar.py bronze/product topo 10    # modos: topo N | amostra N | colunas | resumo | contagem | cargas | versoes
+python scripts/espiar.py bronze/_controle_cargas   # últimas cargas
+python scripts/espiar.py bronze/product topo --carga 2026-10-28 --versao 0 --csv saida.csv
+python -m pytest -q                                # testes (CSVs mínimos em pasta temporária)
+jupyter nbconvert --to notebook --execute --inplace notebooks/explorando_lakehouse.ipynb   # roda o tour e salva com saídas
 ```
-*(comandos da bronze, da silver, do `espiar.py` e dos testes entram aqui conforme forem criados)*
+- Leitura de tabela Delta no código: `src.comum.ler_delta(con, caminho, carga=None, versao=None)`.
+- DuckDB 2.0: relação não tem mais `fetchone()` (usar `fetchall()`) e `fetch_record_batch()` virou `to_arrow_reader()`.
+
+*(comandos da silver e da gold entram aqui conforme forem criados)*

@@ -111,6 +111,7 @@ Uma linha por arquivo carregado, em `lake/bronze/_controle_cargas.parquet`:
 | status | sucesso ou erro, com a mensagem |
 
 - **Por quê:** auditoria. Responde "o que foi carregado, quando, e deu certo?" sem abrir os dados.
+- **Atualizada em 28/10/2026 (B13):** o controle virou tabela **Delta** em `lake/bronze/_controle_cargas` (append), não mais `.parquet`, e ganhou as colunas `tabela`, `carregado_em` e `mensagem`.
 
 ### B6. Tudo como texto na bronze
 - **Decisão:** nenhuma conversão de tipo na bronze.
@@ -177,6 +178,15 @@ retail-lakehouse/
 - **Contagem diferente entre lido e gravado:** a gravação daquela carga não é confirmada (o Delta desfaz a transação) e o erro é registrado.
 
 **O que fica fora do git:** `config.yaml`, `data/` e `lake/`. Só o código, o `config.example.yaml` e a documentação vão para o repositório.
+
+### Decisões tomadas na construção da fase 1 (28/10/2026)
+- **B12. Data da carga no fuso local (pedido do Caio na aprovação do plano):** `_data_carga` é a data **local** em `America/Sao_Paulo` (texto `AAAA-MM-DD`, coluna de partição), nunca a data de UTC. Por quê: em UTC, uma carga depois das 21h cairia na partição do dia seguinte. `_carregado_em` é separado e guarda data, hora e **fuso explícito** (`timestamp with time zone`, ex.: `2026-10-28 16:32:03-03`). O fuso fica no config (`bronze.fuso`). Teste: 22h em São Paulo (01h UTC do dia 29) continua na partição do dia 28.
+- **B13. Controle de cargas em Delta:** ver a atualização da B5. Append de uma linha por tabela por execução, logo depois de cada tabela (se o processo cair no meio, o que já carregou fica registrado).
+- **B14. Leitura Delta sem a extensão `delta` do DuckDB:** `DeltaTable(...).to_pyarrow_dataset()` entregue ao DuckDB (`src/comum.py`, função `ler_delta`). Continua lendo pelo `_delta_log` (F3), sem precisar baixar extensão, e o DuckDB só puxa as colunas e partições usadas. Uma função só para ingestão, `espiar.py`, notebook e testes.
+- **B15. Arquivo só com cabeçalho é erro:** 0 linhas de dado → status `erro` ("arquivo só com cabeçalho"). Um CSV da Dunnhumby nunca vem vazio de verdade; se vier, algo deu errado na origem.
+- **B16. Desfazer quando a contagem não bate:** tabela que já existia → `restore` para a versão de antes da gravação. Tabela criada nessa mesma execução (não há versão anterior) → `delete` da partição do dia. Nos dois casos o status é `erro` e a mensagem diz o que foi feito.
+- **B17. `--data-carga` na ingestão:** `python -m src.bronze.ingest --data-carga AAAA-MM-DD` grava numa data escolhida, para reprocessar ou simular outro dia (base da carga incremental futura). Sem a opção, vale a data de hoje no fuso do config.
+- **B18. Validação do cabeçalho exige a mesma ordem:** colunas iguais em outra ordem também é erro, porque a silver vai depender dos nomes e a ordem diferente indica arquivo diferente do documentado.
 
 ---
 

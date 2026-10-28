@@ -1,3 +1,35 @@
+# Modelo do config.yaml (copie para config.yaml e ajuste os caminhos se precisar).
 paths:
   raw: data/raw
   lake: lake
+
+# Limites do DuckDB: notebook com pouca memória.
+duckdb:
+  memory_limit: "1GB"
+  threads: 2
+
+bronze:
+  batch_rows: 100000            # linhas por lote ao passar do DuckDB para o Delta
+  fuso: America/Sao_Paulo       # _data_carga é a data local neste fuso, não a de UTC
+  tabelas:
+    - tabela: transaction_data
+      arquivo: transaction_data.csv
+      colunas: [household_key, BASKET_ID, DAY, PRODUCT_ID, QUANTITY, SALES_VALUE, STORE_ID, RETAIL_DISC, TRANS_TIME, WEEK_NO, COUPON_DISC, COUPON_MATCH_DISC]
+    - tabela: product
+      arquivo: product.csv
+      colunas: [PRODUCT_ID, MANUFACTURER, DEPARTMENT, BRAND, COMMODITY_DESC, SUB_COMMODITY_DESC, CURR_SIZE_OF_PRODUCT]
+    - tabela: hh_demographic
+      arquivo: hh_demographic.csv
+      colunas: [AGE_DESC, MARITAL_STATUS_CODE, INCOME_DESC, HOMEOWNER_DESC, HH_COMP_DESC, HOUSEHOLD_SIZE_DESC, KID_CATEGORY_DESC, household_key]
+    - tabela: campaign_table
+      arquivo: campaign_table.csv
+      colunas: [DESCRIPTION, household_key, CAMPAIGN]
+    - tabela: campaign_desc
+      arquivo: campaign_desc.csv
+      colunas: [DESCRIPTION, CAMPAIGN, START_DAY, END_DAY]
+    - tabela: coupon
+      arquivo: coupon.csv
+      colunas: [COUPON_UPC, PRODUCT_ID, CAMPAIGN]
+    - tabela: coupon_redempt
+      arquivo: coupon_redempt.csv
+      colunas: [household_key, DAY, COUPON_UPC, CAMPAIGN]
