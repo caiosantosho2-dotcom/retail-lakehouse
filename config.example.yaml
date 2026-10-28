@@ -1,0 +1,3 @@
+paths:
+  raw: data/raw
+  lake: lake

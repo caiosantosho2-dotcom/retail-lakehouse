@@ -1,0 +1,9 @@
+config.yaml
+.env
+venv/
+__pycache__/
+.ipynb_checkpoints/
+data/
+lake/
+*.duckdb
+.claude/settings.local.json
