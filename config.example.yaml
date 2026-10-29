@@ -133,3 +133,48 @@ silver:
         - {nome: orfaos_produto, sql: "SELECT count(*) FROM fact_sales WHERE product_id = -1"}
         - {nome: orfaos_loja, sql: "SELECT count(*) FROM fact_sales WHERE store_id = -1"}
         - {nome: orfaos_cliente, sql: "SELECT count(*) FROM fact_sales WHERE household_key = -1"}
+
+# Gold (spec da fase 3). Parada 3a: só o que a base comum e os modelos usam; períodos e cubos entram na 3b.
+gold:
+  semente: 42
+  janela:                       # janela dos modelos (= janela do RAG): termina na última semana completa (G11)
+    semanas: 26                 # janela do segmento (G7): 26 semanas
+    offset_ano_anterior: 52     # ano anterior = mesmas semanas - 52
+    cliente_ativo_semanas: 8    # >= 1 compra nas últimas 8 semanas do período
+  modelos:                      # parâmetros copiados de C:\RAG_Varejo\config.yaml (analises), commit fffb207, sem mudança (G6)
+    rfm:
+      k_avaliados: [2, 3, 4, 5, 6, 7, 8]
+      k_min: 3
+      ari_minimo: 0.90
+      tamanho_minimo_pct: 5.0
+      silhueta_minima: 0.25
+      n_sementes: 10
+      n_subamostras: 10
+      fracao_subamostra: 0.8
+      n_init: 10
+    clv:
+      margem: 0.25              # premissa: o dataset não tem custo
+      horizonte_semanas: 52     # igual ao offset do ano anterior
+      n_bootstrap: 2000
+      nivel_ic: 0.95
+      tamanho_minimo_grupo: 30
+    churn:
+      horizonte_semanas: 8
+      historico_minimo_semanas: 16
+      janela_comportamento_semanas: 26
+      treino_inicio_antes_do_fim: 71    # fotos de treino T = 30..68 (fim 101)
+      treino_fim_antes_do_fim: 33
+      treino_passo_semanas: 4
+      validacao_antes_do_fim: 24        # T = 77
+      teste_antes_do_fim: [16, 8]       # T = 85 e 93
+      retorno_janela_semanas: 18
+      l2_c: 1.0
+      n_bootstrap: 500
+      nivel_ic: 0.95
+    teste_desconto:
+      alfa: 0.05
+      eta2_relevante: 0.01
+      diferenca_relevante_pp: 1.0
+      compras_minimas_sensibilidade: 5
+      n_bootstrap: 2000
+      nivel_ic: 0.95

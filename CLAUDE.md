@@ -7,7 +7,7 @@ Lakehouse medalhão local sobre a base pública **Dunnhumby "The Complete Journe
 - **Bronze:** os CSVs como chegaram, tudo como texto, com `_arquivo_origem` e `_data_carga`; uma partição por carga; controle de cargas.
 - **Silver `clean`:** uma tabela por arquivo, com tipos, nomes padronizados e regras de qualidade; o que falhar vai para `_rejected` com o motivo.
 - **Silver `context`:** star schema por assunto (`sales`, `customer`, `product`, `shared`).
-- **Gold:** métricas (uma definição cada) e as tabelas vindas dos modelos estatísticos, para o painel v4 e a página de Metodologia.
+- **Gold:** três áreas (G12): `features/` (variáveis dos modelos), `models/` (resultados dos modelos estatísticos) e `metrics/` (métricas do painel, uma definição cada), para o painel v4 e a página de Metodologia.
 - **Formato:** Delta Lake em todas as camadas. **Motor:** DuckDB.
 - **Ferramentas:** `scripts/espiar.py` (inspeção pelo terminal) e `notebooks/explorando_lakehouse.ipynb` (tour com verificações).
 
@@ -38,11 +38,14 @@ python scripts/espiar.py bronze/_controle_cargas   # últimas cargas
 python scripts/espiar.py bronze/product topo --carga 2026-10-28 --versao 0 --csv saida.csv
 python -m src.silver.build                         # reconstrói a silver (clean + context) da carga mais recente da bronze; sai com 1 em erro
 python scripts/espiar.py silver/context/sales/fact_sales contagem   # silver: clean/<t>, context/<assunto>/<t>, _rejected/<t>, _controle_silver
+python -m src.gold.build                          # gold (parada 3a: features + modelos) a partir da silver; sai com 1 em erro
+python scripts/espiar.py gold/models/churn_score contagem   # gold: features/<t>, models/<t>, _controle_gold
 python -m pytest -q                                # testes (CSVs mínimos em pasta temporária)
 jupyter nbconvert --to notebook --execute --inplace notebooks/explorando_lakehouse.ipynb   # roda o tour e salva com saídas
 ```
 - Leitura de tabela Delta no código: `src.comum.ler_delta(con, caminho, carga=None, versao=None)`; como view nomeada na conexão: `src.comum.registrar_delta(con, nome, caminho, ...)`.
 - Silver declarada no `config.yaml` (seção `silver`); consultas da `context` em `sql/silver/*.sql`, com parâmetros via `getvariable(...)`.
-- DuckDB 2.0: relação não tem mais `fetchone()` (usar `fetchall()`) e `fetch_record_batch()` virou `to_arrow_reader()`.
+- DuckDB 2.0: relação não tem mais `fetchone()` (usar `fetchall()`) e `fetch_record_batch()` virou `to_arrow_reader()`. Depois de `execute(...).fetchone()` na conexão, use `execute` (não `sql`) na mesma conexão.
+- Gold: base comum em `sql/gold/base/*.sql` (views sobre a silver); modelos copiados do RAG em `src/gold/modelos/` (cabeçalho com origem e adaptações), parâmetros na seção `gold` do config.
 
 *(comandos da silver e da gold entram aqui conforme forem criados)*

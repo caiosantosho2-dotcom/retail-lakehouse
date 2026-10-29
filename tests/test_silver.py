@@ -247,6 +247,20 @@ def test_dim_date_usa_week_no_do_arquivo_e_data_base(cfg):
     assert d[6]["week_no"] == 2                              # ceil(6/7) = 1: o código não calcula a semana
     assert d[6]["day_of_cycle"] == 1 and d[7]["day_of_cycle"] == 2 and d[1]["day_of_cycle"] == 3
     assert (d[7]["date"], d[7]["month"], d[7]["year"]) == (date(2016, 1, 7), 1, 2016)
+    assert (d[1]["days_in_week"], d[6]["days_in_week"], d[7]["days_in_week"]) == (1, 2, 2)
+    assert not any(d[k]["is_complete_week"] for k in (1, 6, 7))
+    assert d[-1]["days_in_week"] is None and d[-1]["is_complete_week"] is None
+
+
+def test_dim_date_marca_semana_completa(config):
+    # semana 2 com os 7 dias (day 6 a 12); semana 1 só com o day 1
+    extras = [f"5,{400 + d},{d},10,1,1.00,500,0,1000,2,0,0" for d in range(8, 13)]
+    escrever(Path(config).parent / "raw", "transaction_data.csv", TRANSACOES + extras)
+    cfg = preparar(config)
+    assert build.executar(cfg, agora=AGORA) == 0
+    d = {r["day"]: r for r in linhas(cfg, "context/shared/dim_date")}
+    assert all(d[k]["days_in_week"] == 7 and d[k]["is_complete_week"] for k in range(6, 13))
+    assert d[1]["days_in_week"] == 1 and d[1]["is_complete_week"] is False
 
 
 def test_dia_com_duas_semanas_e_erro(config):

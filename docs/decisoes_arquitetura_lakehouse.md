@@ -2,7 +2,7 @@
 
 > Registro das decisões do Caio, camada por camada, com o porquê. Formato de **ADR** (Architecture Decision Record): cada decisão diz o que foi decidido, o motivo e o que fica em aberto. Mudou uma decisão? Não apague: marque como "substituída" e escreva a nova.
 
-## To-do e pendências (atualizado em 28/10/2026)
+## To-do e pendências (atualizado em 29/10/2026)
 
 **A fazer (na ordem):**
 - [ ] Terminar o vídeo de arquitetura e encaixar aqui o que fizer sentido
@@ -12,14 +12,18 @@
 - [x] Fechar as regras específicas da silver com base no perfil → **S9**
 - [x] Construir a silver (fase 2) → `docs/spec_fase2_silver.md` · validação em `docs/validacao/fase2_silver.md` (29/10/2026)
 - [x] Replanejar o painel antes da gold (Caio, 28/10/2026) → ver "Painel v4" abaixo
-- [ ] Decidir como reaproveitar as análises estatísticas do RAG (segmento, CLV, risco de pausa, teste de desconto) como tabelas gold geradas a partir da silver
-- [ ] Desenhar a gold (quem consome e o que cada consumidor precisa: painel, chat, ML)
+- [x] Decidir como reaproveitar as análises estatísticas do RAG como tabelas gold geradas a partir da silver → G5, G6 (29/10/2026)
+- [x] Desenhar a gold: levantamento em `docs/levantamento_gold.md`, decisões G1–G11, spec em `docs/spec_fase3_gold.md` (29/10/2026)
+- [ ] Construir a gold (fase 3)
+  - [x] Parada 3a: features e modelos → `docs/validacao/fase3a_gold.md` (aprovada em 29/10/2026)
+  - [ ] Parada 3b: base comum e métricas → `docs/validacao/fase3b_gold.md`
+  - [ ] Parada 3c: exportação e reconciliação
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
 - [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
 
 **Decisões pendentes:**
 - ~~Regras específicas da silver~~ → fechadas na S9 (28/10/2026). Ficam abertos: significado de `A`/`B` no estado civil (S9.9).
-- Toda a camada gold
+- ~~Toda a camada gold~~ → G1–G11 (29/10/2026)
 - Como o painel e o chat passam a ler da nova arquitetura (ajuste dos nomes para inglês)
 
 ---
@@ -47,6 +51,7 @@
   3. os **cálculos estatísticos prontos** (segmentação RFM, CLV, risco de pausa, teste de desconto), trazidos para cá e adaptados para ler da silver e gravar na gold;
   4. os **números do RAG e do painel atual como gabarito** (só leitura, para conferir).
 - **Consumidores da gold:** o painel v4 e a página de Metodologia. Nada mais por enquanto.
+- **Emenda (29/10/2026, G9):** além do código do RAG, pode ser copiado o `scripts/layout.py` do painel publicado (posições da rede de cestas). O restante do painel serve só como fonte das regras.
 - **Efeito na S7:** marketing fica só na bronze (confirmado pelo Caio em 28/10/2026). A silver passa a ter 5 tabelas: `fact_sales`, `dim_household`, `dim_product`, `dim_store`, `dim_date`.
 
 ## Painel v4: escopo que a gold vai atender (decidido pelo Caio em 28/10/2026)
@@ -452,4 +457,132 @@ retail-lakehouse/
 - **Reprodutível:** a silver é reconstruída do zero a partir da bronze com um comando só.
 
 ## Gold
-*(próxima etapa)*
+> Origem: `docs/levantamento_gold.md` (29/10/2026). As respostas do Caio às 11 perguntas do levantamento viraram as decisões G1–G11, todas de 29/10/2026. O que construir está em `docs/spec_fase3_gold.md`.
+
+### G1. "Base inteira" = semanas 1–101
+- **Decisão:** o período `base` vai da semana 1 à 101, a última semana completa. É a mesma janela do painel publicado.
+- **Diferença registrada (regra 3 do `CLAUDE.md`):** o relatório de qualidade do RAG calcula sobre as **semanas 1–102**. Por isso o ticket médio dele é **US$ 29,39**: faturamento US$ 7.376.322,37 ÷ 250.975 cestas = 29,3907. A gold dá **29,38**: US$ 7.310.849,82 ÷ 248.827 = 29,3813. Os dois números estão certos para as suas janelas. **O 29,39 fica como número do relatório do RAG**, e só ele. Na gold não existe métrica sobre as 102 semanas.
+
+### G2. Faturamento ao longo do tempo (Visão Geral)
+- **(a) O grão acompanha o período:**
+  - **diário** em 4 s (semanas 98–101, 28 dias);
+  - **semanal** em 13 s, 26 s e base inteira.
+- **Ano anterior:**
+  - no diário, é o **mesmo dia − 364** (`day − 364`), que cai no mesmo dia da semana;
+  - no semanal, continua sendo a semana − 52.
+- **(b) Lojas:**
+  - em 4 s, 13 s e 26 s, o atual e o ano anterior usam as **lojas comparáveis do próprio período** (123, 160 e 214), como nos KPIs;
+  - isso substitui a regra do painel publicado, que usava as comparáveis de 26 s em todas as semanas.
+- **(c) Base inteira:** não tem ano anterior. A linha mostra o faturamento de **todas as lojas** (sem ano anterior não existe loja comparável), e a coluna do ano anterior fica nula.
+
+### G3. O gráfico semanal de Categorias acompanha a Visão Geral
+- Ele usa a mesma tabela da gold e o mesmo grão: diário em 4 s, semanal no resto, com o ano anterior e as lojas comparáveis do período.
+- As 52 semanas com sombreado deixam de existir nas duas abas.
+
+### G4. Dinheiro em risco: uma definição só
+- **Definição:** é o **faturamento de 26 semanas** (76–101), por departamento, que veio de clientes com **probabilidade de pausa ≥ limiar** do modelo (0,17). A probabilidade vem da foto final do modelo (T = 101). Soma todas as lojas e não pondera pela probabilidade.
+- **Fórmulas descartadas** (não entram na gold):
+  - **RAG, `churn.risco_por_segmento.valor_em_risco_usd`:** `Σ prob × (gasto de 26 s ÷ 26) × 8`, o gasto esperado que se perde em 8 semanas;
+  - **painel publicado, lista de ação (`faturamento_em_risco`):** `prob × faturamento de 26 s` por cliente. Ela sai junto com a aba Clientes & Lojas.
+
+### G5. Escopo dos modelos na gold
+- **Entram:**
+  - segmentação RFM;
+  - CLV com backtest;
+  - risco de pausa;
+  - teste de desconto;
+  - a **curva ROC**;
+  - os **textos "e daí?"** que a Metodologia mostra.
+- **A cópia do `churn` muda em um ponto:** ela passa a devolver também a **probabilidade por cliente** na foto final e as **notas do conjunto de teste** (modelo e regra simples). É isso que alimenta o dinheiro em risco (G4) e a curva ROC. Assim acaba a reprodução do treino por fora que o painel publicado fazia (`rag_modelos._reproduzir`). O treino, as fotos, o limiar e a regra simples não mudam.
+- **A curva ROC** é escrita aqui com `sklearn.metrics.roc_curve(drop_intermediate=True)`, sobre as notas do teste. Não é copiada do painel.
+
+### G6. Igualdade com o RAG e versões travadas
+- **Versões:** o venv do lakehouse instala as **mesmas versões do RAG** destas 5 bibliotecas:
+  - numpy 2.5.3 (hoje 2.5.4);
+  - pandas 3.0.6 (hoje 3.1.0);
+  - scikit-learn 1.9.1;
+  - scipy 1.18.1;
+  - statsmodels 0.15.0.
+  O RAG roda no mesmo Python 3.14.7.
+- **Exige-se igualdade, não tolerância.** Os números dos modelos e dos cubos têm de ser iguais aos do RAG e do painel publicado, na precisão em que foram publicados. Uma diferença só é aceita com explicação registrada aqui.
+
+### G7. Segmento fixo
+- O segmento de cada cliente é o RFM da janela de **26 semanas (76–101)**, e vale para **todo o histórico e todos os períodos**.
+- Quem não comprou nas 26 semanas fica em **"Sem segmento"**. É um grupo nos cubos, não um chip do filtro.
+- O filtro combina os 4 segmentos em **15 subconjuntos**. Nenhum chip ligado significa todos os clientes, com "Sem segmento" incluído.
+
+### G8. Formato da gold e entrega ao painel
+- **Gold em Delta no grão dos cubos que o painel usa:**
+  - uma tabela por cubo (período × grupo ou subconjunto × departamento etc.), com as métricas já calculadas;
+  - as tabelas que vêm dos modelos.
+- **Etapa de exportação separada:** lê a gold e grava os **JSONs com os contratos atuais** (`contracts/*.schema.json`, formato compacto 2.0). O painel v4 continua lendo JSON.
+- **Exceções:** os cubos que mudaram de grão por decisão do Caio (G2/G3) e os arquivos que saem com a aba Clientes & Lojas. Detalhes na spec.
+
+### G9. Emenda à R1: `layout.py` do painel pode ser copiado
+- A R1 só autorizava reaproveitar código do **RAG**. **Emenda (Caio, 29/10/2026):** o `scripts/layout.py` do painel publicado também pode ser copiado e adaptado. Ele calcula as posições x/y da rede de cestas, com MDS e semente fixa.
+- O resto do código do painel continua fora: ele serve **só como fonte das regras** (lido, não copiado).
+
+### G10. Métricas com um departamento: mantém as do painel
+- Quando um único departamento está selecionado, valem as definições do painel publicado:
+  - cestas = **cestas que têm o departamento**;
+  - ticket = faturamento do departamento ÷ essas cestas;
+  - itens por cesta = itens do departamento ÷ essas cestas;
+  - clientes ativos = **compraram o departamento** nas 8 semanas finais.
+- Com 2 ou mais departamentos, esses cards não têm número ("selecione um departamento"). Faturamento e % de desconto somam e aceitam vários departamentos.
+
+### G11. Semana completa na `dim_date` da silver
+- A `dim_date` ganha **`days_in_week`** (quantos dias da semana existem na base) e **`is_complete_week`** (`days_in_week = 7`).
+- Hoje a semana 1 tem 5 dias, a 102 tem 6 e as demais têm 7.
+- A gold encontra o fim dos dados (semana 101) por essa coluna, não por um número fixo.
+- É uma mudança pequena na silver, feita dentro da fase 3, com teste e verificação no notebook.
+
+### G12. Três áreas na gold: `features/`, `models/` e `metrics/` (decidido pelo Caio em 29/10/2026, durante a parada 3a)
+- **Decisão:** a gold tem três áreas:
+  - **`gold/features/`:** as variáveis que entram nos modelos;
+  - **`gold/models/`:** os resultados dos modelos;
+  - **`gold/metrics/`:** as métricas do painel (3b).
+- **Na 3a, cada modelo continua calculando as variáveis do jeito do RAG,** sem mudar método nem ordem. Ele grava em `gold/features/` exatamente as variáveis que usou:
+  - **`customer_rfm_features`:** cliente × janela de 26 s (76–101). É a entrada do K-Means: recência, frequência e valor, nos valores originais (G21). Também leva ticket, desconto e demografia, que vêm junto da base do RFM;
+  - **`churn_features`:** cliente × foto, com as 5 variáveis e o rótulo, nas fotos de treino, validação, teste e na foto final. A foto final não tem rótulo, porque o rótulo dela é o futuro;
+  - **`clv_features`:** gasto por cliente por janela usada pelo método (atual, calibração, as 52 e as 26 semanas seguintes à calibração, e os análogos).
+- **Por quê:** fica visível e auditável o que alimentou cada modelo, e as variáveis podem ser conferidas por outro caminho sem rodar o modelo.
+- **Como foi feito:**
+  - As cópias do `churn` e do `clv` passam a **devolver** as matrizes e os vetores que já calculavam. Nenhuma conta foi refeita fora do modelo.
+  - O RFM grava a base que o próprio modelo carrega (`rfm.carregar_base`), sem a transformação de `rfm.matriz` (G21).
+
+### Decisões tomadas na construção da parada 3a (29/10/2026)
+> Tomadas pelo Claude seguindo a spec da fase 3. **Aprovadas pelo Caio em 29/10/2026.**
+
+- **G13. `household` da base comum = `dim_household` sem o `-1`.**
+  - O RAG contava os households da venda bruta; a silver junta venda e demografia.
+  - Hoje são os mesmos **2.500** (os 801 da demografia todos compraram).
+  - Se um dia aparecer um cliente só na demografia, ele entra no denominador dos modelos. Isso tem de ser revisto.
+- **G14. Base comum como views do DuckDB** (`sql/gold/base/*.sql`, criadas em ordem pelo prefixo numérico):
+  - `calendar`, `analysis_window`, `sales_item`, `customer_week`, `customer_metrics` e `household`, equivalentes a `dim_data`, `vw_janela`, `vw_vendas_item`, `vw_cliente_semana`, `vw_metricas_cliente` e `dim_household` do RAG;
+  - `customer_week` e `customer_metrics` viram tabela temporária, como as views materializadas do RAG, porque os modelos as leem muitas vezes.
+- **G15. O que saiu das cópias do RAG:**
+  - o decorador `registrar_chamada`, que gravava em `logs/` do RAG;
+  - as ferramentas do chat (`segmentar_clientes`, `prever_churn`, `calcular_clv`, `testar_desconto_entre_segmentos`) e a `coorte_retencao`, que o painel v4 não usa;
+  - o cache em memória, trocado por um dicionário da execução (`parametros.MEMO`). O RFM é usado por três modelos e a escolha do K não é refeita a cada chamada; o resultado é o mesmo.
+  - Os nomes das colunas da gold estão em inglês (S1). As consultas das cópias renomeiam de volta para os nomes que o resto do código do RAG espera, e assim a lógica fica idêntica.
+- **G16. Tabelas a mais em `models/` e uma coluna a menos:**
+  - **`rfm_segment_profile`**, que não estava na spec, guarda o perfil por segmento (% de clientes e % do faturamento, os 35% / 71%);
+  - a `rfm_k_evaluation` ficou sem a coluna `passed`, porque calculá-la repetiria a regra do K fora do modelo; a regra e os K que passaram ficam no texto `metodo_escolha_k` do `model_summary`.
+- **G17. Percentuais nos modelos ficam em 0–100,** como no RAG (é a escala que o código usa, ex.: diferença de 1 pp). A conversão para fração (contratos do painel) acontece na exportação (3c).
+- **G18. Ambiente:**
+  - além das 5 bibliotecas da G6, o `narwhals` (dependência do statsmodels) foi travado na versão do RAG (2.26.0);
+  - o `requirements.txt` foi regerado com `pip freeze`.
+- **G19. Detalhes de implementação:**
+  - a coluna da janela em `clv_features` se chama `spend_window` (`window` é palavra reservada no SQL);
+  - no DuckDB 2.0, depois de um `execute(...).fetchone()` (código do RAG), só `execute` é aceito na mesma conexão (não `sql`). O código da gold usa `execute`.
+- **G20. Idempotência conferida pelo conteúdo ordenado:** a leitura de uma tabela Delta não garante a ordem das linhas. Por isso duas execuções são comparadas pelas tabelas ordenadas, nos testes e na validação.
+
+### Revisão da parada 3a (decidido pelo Caio em 29/10/2026)
+- **G21. Regra das features: variável = valor original; padronizar é etapa do modelo.**
+  - `gold/features/` guarda as variáveis como o modelo as calcula a partir dos dados, **antes** de qualquer transformação que o próprio modelo faça (escala, `log1p` dentro do ajuste, padronização).
+  - **`churn_features`:** fica como está: as 5 variáveis, sem padronizar. O `StandardScaler` é ajustado no treino dentro do modelo. Os `log` de `log_purchases_8w` e `log_value_26w` ficam porque fazem parte da **definição** da variável no RAG (calculados na montagem da foto, antes do modelo).
+  - **`customer_rfm_features`:** saem `log1p_frequency`, `log1p_monetary` e `z_*`. Ficam recência, frequência e valor originais (+ ticket, desconto, demografia). O `log1p` e a padronização acontecem em `rfm.matriz`, que é etapa do modelo.
+  - **Conferido:** os 80 números do RAG continuam iguais depois da troca (`docs/validacao/fase3a_gold.md`, seção "Revisão do Caio"); testes: 96 passed.
+- **G22. Limitação conhecida: o segmento do backtest do CLV fica fora de `clv_features`.**
+  - `clv_features` traz o gasto de cada cliente na janela do backtest (`calibracao_futuro_backtest`), mas não o segmento que o backtest atribui a cada cliente nela.
+  - Incluir exigiria mudar o retorno de `clv.backtest`, uma função copiada do RAG. O resultado do backtest por segmento continua em `models/clv_segment` (`backtest_*`).
