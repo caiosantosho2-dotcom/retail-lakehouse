@@ -36,10 +36,13 @@ python -m src.bronze.ingest --data-carga 2026-10-28  # grava numa data escolhida
 python scripts/espiar.py bronze/product topo 10    # modos: topo N | amostra N | colunas | resumo | contagem | cargas | versoes
 python scripts/espiar.py bronze/_controle_cargas   # últimas cargas
 python scripts/espiar.py bronze/product topo --carga 2026-10-28 --versao 0 --csv saida.csv
+python -m src.silver.build                         # reconstrói a silver (clean + context) da carga mais recente da bronze; sai com 1 em erro
+python scripts/espiar.py silver/context/sales/fact_sales contagem   # silver: clean/<t>, context/<assunto>/<t>, _rejected/<t>, _controle_silver
 python -m pytest -q                                # testes (CSVs mínimos em pasta temporária)
 jupyter nbconvert --to notebook --execute --inplace notebooks/explorando_lakehouse.ipynb   # roda o tour e salva com saídas
 ```
-- Leitura de tabela Delta no código: `src.comum.ler_delta(con, caminho, carga=None, versao=None)`.
+- Leitura de tabela Delta no código: `src.comum.ler_delta(con, caminho, carga=None, versao=None)`; como view nomeada na conexão: `src.comum.registrar_delta(con, nome, caminho, ...)`.
+- Silver declarada no `config.yaml` (seção `silver`); consultas da `context` em `sql/silver/*.sql`, com parâmetros via `getvariable(...)`.
 - DuckDB 2.0: relação não tem mais `fetchone()` (usar `fetchall()`) e `fetch_record_batch()` virou `to_arrow_reader()`.
 
 *(comandos da silver e da gold entram aqui conforme forem criados)*

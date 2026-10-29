@@ -121,7 +121,9 @@ def espiar(cfg: dict, alvo: str, modo: str, n: int, carga: str | None, versao: i
         descricao += f" | carga {carga}"
 
     if modo == "topo":
-        ordem = " ORDER BY carregado_em DESC" if tabela == CONTROLE else ""
+        # Tabelas de controle: execução mais recente primeiro.
+        coluna_tempo = next((c for c in ("carregado_em", "processado_em") if c in rel.columns), None)
+        ordem = f" ORDER BY {coluna_tempo} DESC" if tabela.startswith("_controle") and coluna_tempo else ""
         return descricao, con.sql(f"SELECT * FROM t{ordem} LIMIT {n}")
     if modo == "amostra":
         return descricao, con.sql(f"SELECT * FROM t USING SAMPLE reservoir({n} ROWS)")

@@ -33,3 +33,103 @@ bronze:
     - tabela: coupon_redempt
       arquivo: coupon_redempt.csv
       colunas: [household_key, DAY, COUPON_UPC, CAMPAIGN]
+
+# Silver (fase 2). Reconstruída por inteiro a cada execução a partir da carga mais recente da bronze (P8).
+# Regras: S1-S9 em docs/decisoes_arquitetura_lakehouse.md. Para acrescentar uma tabela: declarar aqui (+ SQL, se for da context).
+silver:
+  batch_rows: 100000
+  limite_rejeicao: 0.01         # rejeitados acima disso numa tabela param a execução (P6)
+  data_base: "2016-01-01"       # date = data_base + (day - 1)
+  faixas:
+    day: [1, 711]
+    week_no: [1, 102]
+  nao_mercadoria:               # S9.2: is_merchandise = false se o departamento OU a commodity estiver aqui
+    departamentos: [KIOSK-GAS, MISC SALES TRAN, MISC. TRANS., COUP/STR & MFG]
+    commodities: [COUPON/MISC ITEMS]
+  ordem_faixas:                 # S9.8: posição na lista = ordem nos gráficos
+    idade: [19-24, 25-34, 35-44, 45-54, 55-64, 65+]
+    renda: [Under 15K, 15-24K, 25-34K, 35-49K, 50-74K, 75-99K, 100-124K, 125-149K, 150-174K, 175-199K, 200-249K, 250K+]
+
+  # clean: uma tabela por arquivo da bronze. Regras globais aplicadas pelo código, nesta ordem:
+  #   invalid_number (TRY_CAST falhou) -> null_key (obrigatorias + chave nulas) -> rejeicoes (abaixo, em ordem) -> duplicate_key (chave repetida)
+  # Condições SQL usam os nomes novos, já tipados (e as colunas derivadas).
+  clean:
+    - tabela: transaction_data
+      origem: transaction_data
+      colunas:
+        - {origem: household_key, nome: household_key, tipo: BIGINT}
+        - {origem: BASKET_ID, nome: basket_id, tipo: BIGINT}
+        - {origem: DAY, nome: day, tipo: INTEGER}
+        - {origem: PRODUCT_ID, nome: product_id, tipo: BIGINT}
+        - {origem: QUANTITY, nome: quantity, tipo: INTEGER}
+        - {origem: SALES_VALUE, nome: sales_value, tipo: "DECIMAL(18,4)"}
+        - {origem: STORE_ID, nome: store_id, tipo: BIGINT}
+        - {origem: RETAIL_DISC, nome: retail_disc, tipo: "DECIMAL(18,4)"}
+        - {origem: TRANS_TIME, nome: trans_time, tipo: INTEGER, descartar: true}   # vira trans_hour e trans_minute
+        - {origem: WEEK_NO, nome: week_no, tipo: INTEGER}
+        - {origem: COUPON_DISC, nome: coupon_disc, tipo: "DECIMAL(18,4)"}
+        - {origem: COUPON_MATCH_DISC, nome: coupon_match_disc, tipo: "DECIMAL(18,4)"}
+      derivadas:
+        - {nome: trans_hour, expressao: "trans_time // 100"}
+        - {nome: trans_minute, expressao: "trans_time % 100"}
+      obrigatorias: [basket_id, household_key, product_id, store_id, day]
+      chave: []                 # fato: sem chave única (S9.11, duplicatas são compras legítimas possíveis)
+      rejeicoes:
+        - motivo: out_of_range
+          condicao: >-
+            day NOT BETWEEN getvariable('day_min') AND getvariable('day_max')
+            OR week_no NOT BETWEEN getvariable('week_no_min') AND getvariable('week_no_max')
+            OR trans_time < 0 OR trans_hour > 23 OR trans_minute > 59
+        - {motivo: negative_sales_value, condicao: "sales_value < 0"}
+        - {motivo: positive_coupon_discount, condicao: "coupon_disc > 0 OR coupon_match_disc > 0"}
+        - {motivo: quantity_zero, condicao: "quantity = 0"}
+      marcacoes:
+        - {nome: is_free_item, condicao: "sales_value = 0 AND quantity > 0"}
+        - {nome: is_refund_discount, condicao: "retail_disc > 0"}
+
+    - tabela: product
+      origem: product
+      colunas:
+        - {origem: PRODUCT_ID, nome: product_id, tipo: BIGINT}
+        - {origem: MANUFACTURER, nome: manufacturer, tipo: BIGINT}
+        - {origem: DEPARTMENT, nome: department, tipo: VARCHAR}
+        - {origem: BRAND, nome: brand, tipo: VARCHAR}
+        - {origem: COMMODITY_DESC, nome: commodity_desc, tipo: VARCHAR}
+        - {origem: SUB_COMMODITY_DESC, nome: sub_commodity_desc, tipo: VARCHAR}
+        - {origem: CURR_SIZE_OF_PRODUCT, nome: curr_size_of_product, tipo: VARCHAR}
+      obrigatorias: []
+      chave: [product_id]
+
+    - tabela: hh_demographic
+      origem: hh_demographic
+      colunas:
+        - {origem: household_key, nome: household_key, tipo: BIGINT}
+        - {origem: AGE_DESC, nome: age_desc, tipo: VARCHAR}
+        - {origem: MARITAL_STATUS_CODE, nome: marital_status_code, tipo: VARCHAR}
+        - {origem: INCOME_DESC, nome: income_desc, tipo: VARCHAR}
+        - {origem: HOMEOWNER_DESC, nome: homeowner_desc, tipo: VARCHAR}
+        - {origem: HH_COMP_DESC, nome: hh_comp_desc, tipo: VARCHAR}
+        - {origem: HOUSEHOLD_SIZE_DESC, nome: household_size_desc, tipo: VARCHAR}
+        - {origem: KID_CATEGORY_DESC, nome: kid_category_desc, tipo: VARCHAR}
+      obrigatorias: []
+      chave: [household_key]
+
+  # context: star schema montado a partir da clean, na ordem da lista (dimensões antes do fato).
+  # Cada SQL enxerga as tabelas da clean como clean_<tabela> e as já montadas da context pelo nome curto (ex.: dim_product).
+  context:
+    - {tabela: product/dim_product, sql: sql/silver/dim_product.sql, chave: [product_id]}
+    - {tabela: sales/dim_store, sql: sql/silver/dim_store.sql, chave: [store_id]}
+    - {tabela: customer/dim_household, sql: sql/silver/dim_household.sql, chave: [household_key]}
+    - tabela: shared/dim_date
+      sql: sql/silver/dim_date.sql
+      chave: [day]
+      pre_condicoes:            # cada consulta tem que devolver 0; senão é erro e a tabela não é gravada
+        - nome: day com mais de um week_no
+          sql: "SELECT count(*) FROM (SELECT day FROM clean_transaction_data GROUP BY day HAVING count(DISTINCT week_no) > 1)"
+    - tabela: sales/fact_sales
+      sql: sql/silver/fact_sales.sql
+      chave: []
+      contagens:                # registradas no controle depois de gravar (P2: órfãos esperados = 0)
+        - {nome: orfaos_produto, sql: "SELECT count(*) FROM fact_sales WHERE product_id = -1"}
+        - {nome: orfaos_loja, sql: "SELECT count(*) FROM fact_sales WHERE store_id = -1"}
+        - {nome: orfaos_cliente, sql: "SELECT count(*) FROM fact_sales WHERE household_key = -1"}

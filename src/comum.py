@@ -32,6 +32,8 @@ def conectar_duckdb(cfg: dict) -> duckdb.DuckDBPyConnection:
     con.execute(f"SET threads = {int(cfg['duckdb']['threads'])}")
     # Texto como string comum do Arrow (o deltalake não precisa lidar com string_view).
     con.execute("SET produce_arrow_string_view = false")
+    # Sem barra de progresso: ela trava o notebook no VS Code e polui a saída dos scripts.
+    con.execute("SET enable_progress_bar = false")
     return con
 
 
@@ -52,3 +54,11 @@ def ler_delta(con: duckdb.DuckDBPyConnection, caminho: str | Path,
     dt = DeltaTable(str(caminho), version=versao)
     filtro = [("_data_carga", "=", carga)] if carga else None
     return con.from_arrow(dt.to_pyarrow_dataset(file_pruning_predicate=filtro))
+
+
+def registrar_delta(con: duckdb.DuckDBPyConnection, nome: str, caminho: str | Path,
+                    carga: str | None = None, versao: int | None = None) -> None:
+    """Expõe a tabela Delta como a view `nome` na conexão (a conexão guarda a referência ao dataset)."""
+    dt = DeltaTable(str(caminho), version=versao)
+    filtro = [("_data_carga", "=", carga)] if carga else None
+    con.register(nome, dt.to_pyarrow_dataset(file_pruning_predicate=filtro))

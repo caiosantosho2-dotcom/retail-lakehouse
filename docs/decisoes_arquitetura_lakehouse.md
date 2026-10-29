@@ -6,22 +6,19 @@
 
 **A fazer (na ordem):**
 - [ ] Terminar o vídeo de arquitetura e encaixar aqui o que fizer sentido
-- [ ] Perfil da bronze (consultas sobre os CSVs do RAG em `data/raw/`):
-  - [ ] grão da cesta: cada `basket_id` com um cliente, uma loja e um dia só?
-  - [ ] formato do `trans_time` (0 a 2359? minuto acima de 59?)
-  - [ ] departamentos com faturamento: a lista de "não mercadoria" está completa?
-  - [ ] valores "Unknown" e categorias de texto na demografia
+- [x] Perfil da bronze (28/10/2026) → `notebooks/perfil_bronze.ipynb` (consultas, resultados e conclusões no notebook, em vez de `docs/perfil_bronze.md`)
+  - [x] grão da cesta · [x] `trans_time` · [x] não mercadoria · [x] "Unknown" na demografia
   - [ ] ~~marketing~~ — fora da silver por enquanto (S7); perfil só quando for modelar
-- [ ] Anotar os resultados em `docs/perfil_bronze.md` (número + conclusão)
-- [ ] Fechar as regras específicas da silver com base no perfil
+- [x] Fechar as regras específicas da silver com base no perfil → **S9**
+- [x] Construir a silver (fase 2) → `docs/spec_fase2_silver.md` · validação em `docs/validacao/fase2_silver.md` (29/10/2026)
 - [x] Replanejar o painel antes da gold (Caio, 28/10/2026) → ver "Painel v4" abaixo
 - [ ] Decidir como reaproveitar as análises estatísticas do RAG (segmento, CLV, risco de pausa, teste de desconto) como tabelas gold geradas a partir da silver
 - [ ] Desenhar a gold (quem consome e o que cada consumidor precisa: painel, chat, ML)
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
-- [ ] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
+- [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
 
 **Decisões pendentes:**
-- Regras específicas da silver para os casos que o perfil revelar (cesta com mais de um cliente/loja/dia, horários inválidos, "Unknown", resgates órfãos)
+- ~~Regras específicas da silver~~ → fechadas na S9 (28/10/2026). Ficam abertos: significado de `A`/`B` no estado civil (S9.9).
 - Toda a camada gold
 - Como o painel e o chat passam a ler da nova arquitetura (ajuste dos nomes para inglês)
 
@@ -238,7 +235,7 @@ retail-lakehouse/
 | | chave de cada `dim_` sem nulos e sem repetição | 0 e 0 |
 | | vendas apontando para o membro "desconhecido" (-1) | 0 (gabarito: zero órfãos) |
 | | `sales_value >= 0` e `quantity > 0` na `fact_sales` | 0 violações |
-| | `fact_sales` com `is_merchandise = false` | 32.805 linhas, US$ 681.121,53 |
+| | `fact_sales` com `is_merchandise = false` | **32.604** linhas, US$ **681.121,43** (os 32.805 do gabarito menos 201 linhas com quantidade zero, que vão para os rejeitados; ver S9) |
 | | soma de `sales_value` por semana = soma da bronze por semana | 102 semanas, diferença até US$ 0,01 |
 | | `dim_household` com `has_demographics = true` | 801 de 2.500 |
 | | `dim_date`: dias e semanas | 711 dias, semanas 1 a 102 vindas do arquivo |
@@ -393,7 +390,7 @@ retail-lakehouse/
 
 **Ajustes a partir do gabarito (A1, A2 e A3 confirmados pelo Caio em 28/10/2026):**
 - **A1. "Não mercadoria" não é dado sujo:** são vendas reais de outro tipo (combustível, cupons). Na silver elas **ficam**, com uma coluna `is_merchandise` (verdadeiro/falso). Quem exclui é a **gold**, nas métricas que pedem isso (ticket, itens por cesta). Motivo: a silver guarda a verdade, e a regra de negócio é da gold. Efeito colateral: se fossem rejeitadas, os 1,8% de rejeição (47.070 linhas) passariam do limite de 1% e o pipeline pararia.
-- **A2. Dinheiro com 4 casas, não 2 (corrige P5):** `decimal(12,4)`. Arredondar para centavos na silver faria os totais semanais se afastarem do gabarito. O arredondamento para exibição acontece só no painel.
+- **A2. Dinheiro com 4 casas, não 2 (corrige P5):** `decimal(12,4)` → **`decimal(18,4)`**, o mesmo tipo do RAG (ajuste de 28/10/2026, S9). Arredondar para centavos na silver faria os totais semanais se afastarem do gabarito. O arredondamento para exibição acontece só no painel.
 - **A3. Regras com número:** `quantity = 0` → rejeitado (14.466 linhas, 0,56%, abaixo do limite); `sales_value >= 0`; descontos `<= 0` com os 2 estornos positivos **mantidos e marcados**, não rejeitados.
 
 **O que o gabarito NÃO cobre (perfil ainda necessário):**
@@ -402,6 +399,53 @@ retail-lakehouse/
 - valores de texto como "Unknown" na demografia;
 - conferir a lista de departamentos "não mercadoria" (há outros parecidos que ficaram de fora?);
 - formato do `trans_time`.
+
+### S9. Regras da silver a partir do perfil da bronze (28/10/2026)
+> Origem: `notebooks/perfil_bronze.ipynb` (números da bronze, carga de 28/10/2026). Propostas no perfil e **aprovadas pelo Caio para a fase 2**; a validação da fase 2 confirma os números.
+
+**O que o perfil confirmou (vira teste automático, não regra de limpeza):** todo texto converte para número (0 inválidos); cada `basket_id` tem 1 cliente, 1 loja e 1 dia (0 problemas); `trans_time` entre 0000 e 2359, sempre 4 caracteres; `product_id` único no cadastro; 0 vendas sem cadastro; 0 duplicatas; 0 valores e quantidades negativos; `coupon_disc` e `coupon_match_disc` nunca positivos.
+
+| # | Regra | Linhas (bronze) | Ação |
+|---|---|---|---|
+| S9.1 | `quantity = 0` | 14.466 (US$ 19,28) | **rejeitar**, motivo `quantity_zero`. 7.839 delas são dos 15 produtos sem departamento. 201 delas são não mercadoria (US$ 0,10) |
+| S9.2 | Não mercadoria: departamentos KIOSK-GAS, MISC SALES TRAN, MISC. TRANS., COUP/STR & MFG **ou** commodity COUPON/MISC ITEMS | 32.805 (US$ 681.121,53) | **manter**, `is_merchandise = false` (A1). Explica as quantidades de até ~90 mil |
+| S9.3 | Item grátis (`sales_value = 0` e `quantity > 0`) | 4.451 (3.994 em mercadoria) | **manter**, `is_free_item = true` |
+| S9.4 | `retail_disc > 0` (estorno) | 10 na bronze, todas de mercadoria; 8 têm `quantity = 0` e saem pela S9.1 → **2 na `fact_sales`** *(corrigido em 29/10/2026; antes dizia "10 (2 em mercadoria)")* | **manter**, `is_refund_discount = true` |
+| S9.5 | Conversão de tipo falha, chave nula, faixa inválida (`day` 1–711, `week_no` 1–102, `trans_time` válido), `sales_value < 0`, `coupon_disc > 0`, `coupon_match_disc > 0` | 0 | **rejeitar** com o motivo; existem para pegar cargas futuras |
+| S9.6 | `trans_time` | 0 inválidos | vira `trans_hour` e `trans_minute` (inteiros, como na P5) |
+| S9.7 | Texto vazio no cadastro de produto | 15 sem departamento/commodity · 30.607 sem tamanho | `TRIM` e vazio → nulo na `clean`; na `dim_product`, departamento e commodity nulos viram `'UNKNOWN'` |
+| S9.8 | Demografia: faixas de idade e renda | 6 e 12 faixas | colunas de ordem `age_band_order` e `income_band_order` para gráficos ordenados |
+| S9.9 | Demografia: "sem informação" (`Unknown`, `None/Unknown`, `U`) | 233 · 73 · 558 · 344 | **mantidos como vieram** (são respostas de quem está na pesquisa). `None/Unknown` não dá para separar. `A`/`B` do estado civil **não são traduzidos** até confirmar o significado na documentação |
+| S9.10 | Clientes sem demografia | 1.699 de 2.500 | segue a **P3**: colunas nulas + `has_demographics = false` (a proposta do perfil de preencher `'Unknown'` foi descartada para não confundir "fora da pesquisa" com "respondeu Unknown") |
+| S9.11 | Duplicatas | 0 | sem deduplicação; teste automático |
+
+**Ordem de rejeição:** cada linha rejeitada leva **um** motivo, o da primeira regra que falhar, na ordem da configuração. Assim, bronze = silver + rejeitados fecha sem contar linha duas vezes.
+
+**Conta que a silver tem que fechar (gabarito):**
+- `transaction_data`: 2.595.732 = **2.581.266** (`fact_sales`) + **14.466** rejeitadas (0,56%).
+- Mercadoria na `fact_sales`: **2.548.662** linhas, US$ **7.376.322,37** (= números "limpos" do RAG).
+- Não mercadoria na `fact_sales`: **32.604** linhas, US$ **681.121,43**.
+- Total na `fact_sales`: US$ **8.057.443,80** (= 8.057.463,08 da bronze − 19,28 das rejeitadas).
+
+### Decisões tomadas na construção da fase 2 (28/10/2026, sem supervisão; a opção mais conservadora em cada dúvida)
+> Tomadas pelo Claude durante a construção noturna, seguindo a spec (`docs/spec_fase2_silver.md`). Revisar.
+
+- **S10. Chave repetida numa tabela de dimensão da `clean`:** **todas** as linhas com a chave repetida vão para `_rejected` com o motivo `duplicate_key`. Nenhuma é escolhida no lugar das outras. Ordem global dos motivos: `invalid_number` → `null_key` → regras específicas do config (em ordem) → `duplicate_key`. Hoje: 0 casos.
+- **S11. Nulos nas regras e marcações:** uma condição de rejeição que dá nulo **não rejeita** (só rejeita o que comprovadamente falha). Uma marcação que dá nulo **fica nula**, não vira `false`. Por isso `week_no` ou `trans_time` nulos passariam, porque não estão na lista de chaves obrigatórias da spec. Hoje: 0 casos.
+- **S12. Membro desconhecido (-1):** na `dim_product`, departamento e commodity `'UNKNOWN'` e `is_merchandise` **nulo** (não se sabe o que é; a venda órfã não entra como mercadoria nem como não mercadoria). Na `dim_household`, `has_demographics = false`. Na `dim_date`, todas as colunas nulas. As dimensões não levam `_data_carga` nem `_processado_em`, porque a spec lista essas colunas só na `fact_sales`.
+- **S13. Falha na silver:**
+  - Se qualquer tabela da `clean` falhar (incluindo rejeição acima de 1%), a `context` não é montada e não ganha linha no controle. O comando termina com 1.
+  - Na `context`, a execução para na primeira tabela que falhar, porque as seguintes dependem dela.
+  - Uma dimensão só é gravada depois de conferir que a chave não tem nulos nem repetições. A `dim_date` só é gravada se nenhum `day` tiver mais de um `week_no` (pré-condição declarada no config).
+  - Nos dois casos, a versão anterior da `context` continua no lake até uma execução com sucesso. O controle mostra o erro.
+- **S14. Parâmetros como variáveis SQL:** faixas, data-base, lista de não mercadoria e ordem das faixas vão do config para o DuckDB com `SET VARIABLE` e são lidos com `getvariable(...)` nas regras e nas consultas da `context` (`sql/silver/*.sql`). O config também declara as pré-condições e as contagens de órfãos.
+- **S15. Leitura das tabelas Delta como views:** `src.comum.registrar_delta` faz o mesmo que `ler_delta` (lê pelo `_delta_log`, F3), mas registra o dataset na conexão. Assim a view continua válida entre funções. A `fact_sales` lê as dimensões já gravadas em Delta, não a consulta em memória.
+- **S16. Gravação da silver com `schema_mode="overwrite"`:** a silver é reconstruída por inteiro (P8). Uma mudança de colunas no config gera uma versão nova com o esquema novo, em vez de erro.
+- **S17. `trans_time`:** convertido para `INTEGER`, depois `trans_hour = trans_time // 100` e `trans_minute = trans_time % 100`. É fora de faixa se for negativo, se a hora passar de 23 ou se o minuto passar de 59.
+- **S18. `dim_date` a partir dos dias com venda:** os 711 dias vêm da `fact_sales` (o `week_no` só existe no arquivo e não pode ser calculado). Um dia sem nenhuma venda não apareceria. Hoje são os 711.
+- **S19. Barra de progresso do DuckDB desligada em toda conexão** (`src.comum.conectar_duckdb`), não só no notebook.
+- **Achado (não é regra nova): `is_refund_discount`** dá **2** na `fact_sales`, e não os "2 / 10" esperados. As 10 linhas da bronze com `retail_disc > 0` são todas de mercadoria, e 8 delas têm `quantity = 0`: são rejeitadas (S9.1) antes de virar venda. O "10 (2 em mercadoria)" da S9.4 contava antes da regra da quantidade zero. A regra não foi mudada. **Resolvido pelo Caio em 29/10/2026:** esperado corrigido para "2 / 2" na S9.4 e no notebook. A conciliação 2 + 8 = 10 continua no notebook.
+- **Limitação conhecida (decidido pelo Caio em 29/10/2026): commodity `COUPON` conta como mercadoria.** São 3 produtos (AUTOMOTIVE, MEAT-WHSE, ELECT &PLUMBING), 68 vendas, US$ 459,66, fora da lista de não mercadoria da S9.2. Ficam como mercadoria **para bater com o gabarito do RAG** (US$ 7.376.322,37). Efeito: a mercadoria pode estar superestimada em até US$ 459,66 (0,006%). Se um dia entrarem na lista, a mercadoria passa a US$ 7.375.862,71 e a diferença com o RAG tem de ser registrada.
 
 ### Princípio de simplicidade (decidido em 28/10/2026)
 - Aplicar o que é **padrão de mercado** e simplificar o resto. Ficou fora, de propósito: hash de arquivo, ferramentas de catálogo e linhagem, banco separado de auditoria e metadados em excesso por linha.
