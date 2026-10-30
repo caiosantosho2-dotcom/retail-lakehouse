@@ -8,6 +8,10 @@ na janela atual, na do ano anterior e na do backtest, que o CLV exige):
 - em pausa: compra só nas 6 primeiras semanas de cada bloco de 26 (recência alta no fim de cada janela).
 Mais clientes que só compram nas semanas 1–20 (sem compra nas janelas) e um produto de não mercadoria.
 Semanas de 7 dias (day = 7 * (week - 1) + 1..7); a semana 102 tem só 3 dias e fica fora da janela.
+Para as métricas (3b), sem mexer no sorteio (os modelos veem os mesmos valores):
+- produtos: 1 = GROCERY/SOUP (marca própria), 2 = GROCERY/BREAD (nacional), 3 = PRODUCE/FRUIT (nacional; é o produto 2
+  das cestas de clientes pares), 9 = não mercadoria;
+- a loja 4 só existe nas semanas 98–101 (as cestas do cliente 1 nelas): não tem ano anterior e não é comparável.
 """
 from __future__ import annotations
 
@@ -22,6 +26,9 @@ PERFIS = {"fiel": (60, 0.9, 60.0), "regular": (70, 0.5, 30.0), "esporadico": (50
           "antigo": (10, 0.6, 20.0)}
 ULTIMA_SEMANA = 102
 DIAS_ULTIMA_SEMANA = 3
+PRODUTOS = {1: ("GROCERY", "SOUP", "Private", 69), 2: ("GROCERY", "BREAD", "National", 10),
+            3: ("PRODUCE", "FRUIT", "National", 20), 9: ("KIOSK-GAS", "GASOLINE", "National", 30)}
+LOJA_NOVA, CLIENTE_LOJA_NOVA, SEMANA_LOJA_NOVA = 4, 1, 98
 
 
 def compra(perfil: str, semana: int, rng: np.random.Generator, prob: float) -> bool:
@@ -47,12 +54,15 @@ def gerar(lake: Path, semente: int = 7) -> dict:
                 dias = DIAS_ULTIMA_SEMANA if semana == ULTIMA_SEMANA else 7
                 dia = 7 * (semana - 1) + int(rng.integers(1, dias + 1))
                 cesta += 1
+                loja = LOJA_NOVA if hh == CLIENTE_LOJA_NOVA and semana >= SEMANA_LOJA_NOVA else 1 + hh % 3
                 for produto, merc in ((1, True), (2, True), (9, False)):
                     if produto == 9 and rng.random() > 0.1:
                         continue
                     valor = round(float(ticket * rng.uniform(0.3, 0.7)), 2)
                     desc = round(-valor * float(rng.uniform(0, 0.3)), 2)
-                    for c, v in (("household_key", hh), ("basket_id", cesta), ("store_id", 1 + hh % 3),
+                    if produto == 2 and hh % 2 == 0:
+                        produto = 3
+                    for c, v in (("household_key", hh), ("basket_id", cesta), ("store_id", loja),
                                  ("product_id", produto), ("day", dia), ("week_no", semana), ("quantity", 1),
                                  ("sales_value", valor), ("retail_disc", desc), ("coupon_disc", 0.0),
                                  ("coupon_match_disc", 0.0), ("is_merchandise", merc)):
@@ -76,7 +86,12 @@ def gerar(lake: Path, semente: int = 7) -> dict:
     })
     dim_household = pa.table({"household_key": pa.array(list(range(1, hh + 1)) + [-1], pa.int64()),
                               "has_demographics": pa.array([k % 3 == 0 for k in range(1, hh + 1)] + [False], pa.bool_())})
+    dim_product = pa.table({
+        "product_id": pa.array(list(PRODUTOS), pa.int64()),
+        "department": [p[0] for p in PRODUTOS.values()], "commodity_desc": [p[1] for p in PRODUTOS.values()],
+        "brand": [p[2] for p in PRODUTOS.values()], "manufacturer": pa.array([p[3] for p in PRODUTOS.values()], pa.int64()),
+        "is_merchandise": [k != 9 for k in PRODUTOS]})
     for tabela, dado in (("context/sales/fact_sales", fact), ("context/shared/dim_date", dim_date),
-                         ("context/customer/dim_household", dim_household)):
+                         ("context/customer/dim_household", dim_household), ("context/product/dim_product", dim_product)):
         write_deltalake(str(lake / "silver" / tabela), dado, mode="overwrite")
     return perfil_de

@@ -141,6 +141,28 @@ gold:
     semanas: 26                 # janela do segmento (G7): 26 semanas
     offset_ano_anterior: 52     # ano anterior = mesmas semanas - 52
     cliente_ativo_semanas: 8    # >= 1 compra nas últimas 8 semanas do período
+  metricas:                     # métricas do painel v4 (seção 5 da spec): números de regra lidos pelo SQL da gold
+    periodos:                   # filtro global (G1, G2): todos terminam na última semana completa
+      - {periodo: 4s, semanas: 4, ponto: day}       # diário, ano anterior = mesmo dia - 364
+      - {periodo: 13s, semanas: 13, ponto: week}
+      - {periodo: 26s, semanas: 26, ponto: week}
+      - {periodo: base, semanas: null, ponto: week} # semana 1 até o fim, sem ano anterior
+    offset_dias_ano_anterior: 364
+    segmentos: [Fiéis, Regulares, Esporádicos, Em pausa]   # ordem do contrato; o bit do subconjunto é a posição
+    sem_segmento: Sem segmento
+    limites:
+      kpi_cestas: 100                # KPI com menos cestas = amostra pequena
+      departamento_participacao: 0.001   # departamento ou marca com menos de 0,1% do faturamento
+      par_cestas: 200                # par de subcategorias ou de nós com menos cestas fica fora
+      grupo_compradores: 30          # subconjunto com menos compradores no departamento
+    cesta:
+      top_subcategorias: 10          # top N subcategorias por departamento
+      pares_por_departamento: 10     # top N pares por lift em cada departamento
+      rede_nos: 80                   # nós da rede = as maiores subcategorias da janela de 26 s
+      rede_ligacoes_por_no: 3
+      vizinhos_por_no: 10
+      caracteristicos: 15
+      concentracao: 0.80             # quantas subcategorias (e fabricantes) fazem 80% do faturamento
   modelos:                      # parâmetros copiados de C:\RAG_Varejo\config.yaml (analises), commit fffb207, sem mudança (G6)
     rfm:
       k_avaliados: [2, 3, 4, 5, 6, 7, 8]

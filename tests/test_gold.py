@@ -1,7 +1,8 @@
-"""Testes da gold, parada 3a (base comum + features + modelos), sobre uma silver sintética (tests/gold_sintetico.py).
+"""Testes da gold (base comum, features, modelos e métricas) sobre uma silver sintética (tests/gold_sintetico.py).
 
-A igualdade dos modelos com o RAG é provada pela conferência sobre os dados reais (docs/validacao/fase3a_gold.md),
-não aqui: estes testes cobrem a parte mecânica (janela, definições da base, grão e colunas, semente, controle).
+A igualdade com o RAG e com o painel publicado é provada pelas conferências sobre os dados reais
+(docs/validacao/fase3a_gold.md e fase3b_gold.md), não aqui: estes testes cobrem a parte mecânica (janela, definições,
+macros, grão e colunas, semente, controle).
 """
 from __future__ import annotations
 
@@ -26,7 +27,9 @@ _spec.loader.exec_module(espiar)
 MODELOS = ["customer_segment", "rfm_k_evaluation", "rfm_segment_profile", "churn_score", "churn_test_score",
            "churn_classifier", "churn_roc", "clv_segment", "discount_test_pair", "discount_test_segment", "model_summary"]
 FEATURES = ["customer_rfm_features", "churn_features", "clv_features"]
+METRICAS = [n for n, tipo in build.METRICAS if tipo in ("tabela", "por_periodo_departamento", "layout")]
 TABELAS = [f"features/{t}" for t in FEATURES] + [f"models/{t}" for t in MODELOS]
+TODAS = TABELAS + [f"metrics/{t}" for t in METRICAS]
 SEGMENTOS = {"Fiéis", "Regulares", "Esporádicos", "Em pausa"}
 
 
@@ -42,13 +45,14 @@ def montar_config(pasta: Path) -> Path:
 
 @pytest.fixture(scope="module")
 def pronto(tmp_path_factory) -> tuple[Path, dict]:
-    """Silver sintética + gold construída DUAS vezes (a segunda prova a idempotência)."""
+    """Silver sintética + gold construída DUAS vezes: num processo só e pela linha de comando (um processo por etapa,
+    G33). As duas versões iguais provam a idempotência e que separar os processos não muda o resultado."""
     pasta = tmp_path_factory.mktemp("gold")
     config = montar_config(pasta)
     perfil = gerar(pasta / "lake")
     cfg = carregar_config(config)
     assert build.executar(cfg) == 0
-    assert build.executar(cfg) == 0
+    assert build.main(["--config", str(config)]) == 0
     return config, perfil
 
 
@@ -60,7 +64,8 @@ def cfg(pronto) -> dict:
 @pytest.fixture
 def con(cfg):
     c = build.preparar_conexao(cfg)
-    for t in TABELAS:
+    build.configurar_metricas(c, cfg)
+    for t in TODAS:
         registrar_delta(c, t.split("/")[1], caminho_tabela(cfg, "gold", t))
     yield c
     c.close()
@@ -91,8 +96,14 @@ def test_semana_incompleta_no_fim_recua_a_janela(tmp_path):
         if r["week_no"] == 101:
             r["days_in_week"], r["is_complete_week"] = 6, False
     write_deltalake(str(lake / "silver/context/shared/dim_date"), pa.Table.from_pylist(dt), mode="overwrite")
-    c = build.preparar_conexao(carregar_config(montar_config(tmp_path)))
+    cfg = carregar_config(montar_config(tmp_path))
+    c = build.preparar_conexao(cfg)
     assert um(c, "SELECT week_end_current, week_start_current, week_end_prior FROM analysis_window") == (100, 75, 48)
+    # os períodos do painel recuam junto
+    build.configurar_metricas(c, cfg)
+    c.execute(f"CREATE TEMP TABLE dim_period AS {build._sql_metrica('dim_period')}")
+    assert {r for r in c.execute("SELECT period, week_start, week_end FROM dim_period").fetchall()} == \
+        {("4s", 97, 100), ("13s", 88, 100), ("26s", 75, 100), ("base", 1, 100)}
 
 
 def test_sales_item_so_mercadoria_ate_o_fim_e_desconto_positivo(con):
@@ -233,6 +244,132 @@ def test_teste_de_desconto_pares_e_veredito(con):
     assert "conclusao" in resumo(con, "teste_desconto", "e_dai")
 
 
+# ---------------------------------------------------------------- métricas: macros e uma definição por métrica
+
+def test_macros_casos_feitos_a_mao(con):
+    casos = {
+        "avg_ticket(10, 4)": 2.5, "avg_ticket(10, 0)": None,
+        "items_per_basket(30, 4)": 7.5, "items_per_basket(3, 0)": None,
+        "discount_rate(15, 100)": 0.15, "discount_rate(1, 0)": None,
+        "growth(110, 100)": 110 / 100 - 1, "growth(5, 0)": None,
+        "share(1, 4)": 0.25, "share(1, 0)": None,
+        "private_label_share(3, 12)": 0.25, "private_label_share(3, 0)": None,
+        "penetration(20, 80)": 0.25, "penetration(2, 0)": None,
+        "frequency(9, 3)": 3.0, "frequency(9, 0)": None,
+        "support(2, 10)": 0.2, "confidence(2, 4)": 0.5,
+        "lift(2, 4, 5, 10)": 1.0, "lift(4, 4, 5, 10)": 2.0,
+        "jaccard(2, 4, 5)": 2 / 7,
+        "index_vs_all(0.2, 0.1)": 200.0, "index_vs_all(1, 0)": None,
+        "lift_index(3, 1.5)": 2.0,
+    }
+    for expressao, esperado in casos.items():
+        valor = um(con, f"SELECT {expressao}")[0]
+        assert (valor is None) if esperado is None else abs(valor - esperado) < 1e-12, expressao
+
+
+def test_uma_definicao_por_metrica_nenhuma_conta_fora_das_macros():
+    # Toda razão das métricas passa por uma macro de sql/gold/metricas.sql: nenhuma divisão escrita nos SQL dos cubos.
+    for arquivo in sorted(build.METRICS_SQL.glob("*.sql")):
+        codigo = "\n".join(l.split("--")[0] for l in arquivo.read_text(encoding="utf-8").splitlines())
+        assert "/" not in codigo, arquivo.name
+
+
+# ---------------------------------------------------------------- métricas: períodos, lojas e tempo
+
+def test_periodos_terminam_na_ultima_semana_completa(con):
+    linhas = con.execute("""SELECT period, week_start, week_end, prior_week_start, prior_week_end, point_grain
+                            FROM dim_period ORDER BY position""").fetchall()
+    assert linhas == [("4s", 98, 101, 46, 49, "day"), ("13s", 89, 101, 37, 49, "week"),
+                      ("26s", 76, 101, 24, 49, "week"), ("base", 1, 101, None, None, "week")]
+
+
+def test_loja_sem_venda_no_ano_anterior_nao_e_comparavel(con):
+    lojas = dict(con.execute("SELECT period, list(store_id ORDER BY store_id) FROM period_comparable_store GROUP BY 1").fetchall())
+    assert lojas == {"4s": [1, 2, 3], "13s": [1, 2, 3], "26s": [1, 2, 3]}
+    # a loja 4 vende no período (fica no faturamento de todas as lojas), mas não no comparável
+    total, comparavel = um(con, """SELECT sum(revenue), sum(revenue_comparable) FROM cube_period WHERE period = '4s'""")
+    loja4 = um(con, "SELECT sum(revenue) FROM sales_item WHERE store_id = 4")[0]
+    assert loja4 > 0 and total - comparavel == loja4
+
+
+def test_faturamento_no_tempo_diario_em_4s_com_dia_menos_364(con):
+    pontos = con.execute("""SELECT point, sum(revenue), sum(revenue_prior_year), any_value(point_grain)
+                            FROM revenue_over_time WHERE period = '4s' GROUP BY point""").fetchall()
+    dias = {d for (d,) in con.execute("SELECT day FROM calendar WHERE week_no BETWEEN 98 AND 101").fetchall()}
+    assert {p[0] for p in pontos} <= dias and len(pontos) > 20
+    for dia, fat, ant, grao in pontos:
+        assert grao == "day"
+        esperado = um(con, f"""SELECT coalesce(sum(revenue) FILTER (WHERE day = {dia}), 0),
+                                      coalesce(sum(revenue) FILTER (WHERE day = {dia} - 364), 0)
+                               FROM sales_item WHERE store_id IN (1, 2, 3)""")
+        assert (fat, ant) == esperado, dia
+
+
+def test_faturamento_no_tempo_semanal_e_base_sem_ano_anterior(con):
+    assert {r[0] for r in con.execute("SELECT DISTINCT point_grain FROM revenue_over_time WHERE period <> '4s'").fetchall()} == {"week"}
+    semana = um(con, """SELECT sum(revenue), sum(revenue_prior_year) FROM revenue_over_time
+                        WHERE period = '26s' AND point = 100""")
+    assert semana == um(con, """SELECT sum(revenue) FILTER (WHERE week_no = 100), sum(revenue) FILTER (WHERE week_no = 48)
+                                FROM sales_item WHERE store_id IN (1, 2, 3)""")
+    # base: todas as lojas (com a loja 4) e ano anterior nulo
+    base = um(con, "SELECT sum(revenue), count(revenue_prior_year) FROM revenue_over_time WHERE period = 'base' AND point = 100")
+    assert base == (um(con, "SELECT sum(revenue) FROM sales_item WHERE week_no = 100")[0], 0)
+    assert um(con, "SELECT min(point), max(point) FROM revenue_over_time WHERE period = 'base'") == (1, 101)
+
+
+# ---------------------------------------------------------------- métricas: grupos, filtros e departamento
+
+def test_sem_segmento_e_os_15_subconjuntos(con, pronto):
+    antigos = {h for h, p in pronto[1].items() if p == "antigo"}
+    grupos = dict(con.execute("SELECT household_key, segment FROM customer_group").fetchall())
+    assert len(grupos) == len(pronto[1])
+    assert {grupos[h] for h in antigos} == {"Sem segmento"}
+    assert um(con, "SELECT count(*) FROM customer_group WHERE segment = 'Sem segmento'")[0] == \
+        len(pronto[1]) - um(con, "SELECT count(*) FROM customer_segment")[0]
+    subconjuntos = dict(con.execute("SELECT subset, list(segment ORDER BY segment) FROM segment_subset GROUP BY 1").fetchall())
+    assert len(subconjuntos) == 16
+    assert sorted(subconjuntos["todos"]) == sorted(SEGMENTOS | {"Sem segmento"})
+    assert um(con, "SELECT DISTINCT subset_mask FROM segment_subset WHERE subset = 'Fiéis+Regulares'")[0] == 3
+    assert "Sem segmento" not in {s for k, v in subconjuntos.items() if k != "todos" for s in v}
+
+
+def test_kpi_com_um_departamento_usa_as_definicoes_do_painel(con):
+    # G10: cestas com o departamento; ticket = faturamento do departamento ÷ essas cestas; clientes ativos = compraram o
+    # departamento nas 8 semanas finais (94–101)
+    k = um(con, """SELECT baskets, avg_ticket, active_customers FROM kpi_filtered
+                   WHERE period = '26s' AND subset = 'todos' AND department = 'PRODUCE'""")
+    cestas, fat = um(con, """SELECT count(DISTINCT basket_id), sum(revenue) FROM sales_item
+                            WHERE department = 'PRODUCE' AND week_no BETWEEN 76 AND 101""")
+    ativos = um(con, "SELECT count(DISTINCT household_key) FROM sales_item WHERE department = 'PRODUCE' AND week_no BETWEEN 94 AND 101")[0]
+    assert k == (cestas, float(fat) / cestas, ativos)
+    # sem departamento, clientes ativos é a regra de customer_metrics
+    assert um(con, "SELECT active_customers FROM kpi_filtered WHERE period = '26s' AND subset = 'todos' AND department = 'todos'")[0] == \
+        um(con, "SELECT count(*) FROM customer_metrics WHERE period = 'current' AND is_active")[0]
+
+
+def test_dinheiro_em_risco_so_de_quem_tem_alerta(con):
+    risco = um(con, "SELECT money_at_risk FROM department_risk WHERE subset = 'todos' AND department = 'todos'")[0]
+    esperado = um(con, """SELECT coalesce(sum(i.revenue), 0) FROM sales_item i JOIN churn_score c USING (household_key)
+                          WHERE c.is_high_risk AND i.week_no BETWEEN 76 AND 101""")[0]
+    assert risco == esperado
+    assert um(con, "SELECT count(*) FROM department_risk WHERE money_at_risk > revenue")[0] == 0
+
+
+def test_cubo_soma_todo_o_faturamento_do_periodo(con):
+    for periodo, ini in (("4s", 98), ("26s", 76), ("base", 1)):
+        assert um(con, f"SELECT sum(revenue) FROM cube_period WHERE period = '{periodo}'")[0] == \
+            um(con, f"SELECT sum(revenue) FROM sales_item WHERE week_no BETWEEN {ini} AND 101")[0], periodo
+
+
+def test_pares_de_cesta_e_rede(con):
+    pares = con.execute("SELECT DISTINCT department, subcategory_a, subcategory_b FROM basket_pair").fetchall()
+    assert pares == [("GROCERY", "BREAD", "SOUP")]
+    assert um(con, "SELECT min(baskets_pair) FROM basket_pair")[0] >= 200
+    nos, fora = um(con, "SELECT count(*), count(*) FILTER (WHERE x NOT BETWEEN 0 AND 1 OR y NOT BETWEEN 0 AND 1) FROM network_node")
+    assert nos == 3 and fora == 0   # as 3 subcategorias de mercadoria
+    assert um(con, "SELECT count(*) FROM network_link WHERE period = '26s' AND subset = 'todos'")[0] > 0
+
+
 # ---------------------------------------------------------------- execução
 
 def ordenada(caminho: str, versao: int) -> pa.Table:
@@ -243,7 +380,7 @@ def ordenada(caminho: str, versao: int) -> pa.Table:
 
 
 def test_idempotencia_duas_execucoes_iguais(cfg):
-    for t in TABELAS:
+    for t in TODAS:
         caminho = str(caminho_tabela(cfg, "gold", t))
         assert DeltaTable(caminho).version() == 1, t
         assert ordenada(caminho, 1).equals(ordenada(caminho, 0)), t
@@ -251,8 +388,30 @@ def test_idempotencia_duas_execucoes_iguais(cfg):
 
 def test_controle_registra_as_execucoes(cfg):
     linhas = DeltaTable(str(caminho_tabela(cfg, "gold", build.CONTROLE))).to_pyarrow_table().to_pylist()
-    assert len(linhas) == 2 * len(TABELAS)
+    assert len(linhas) == 2 * len(TODAS)
+    assert {l["etapa"] for l in linhas} == {"modelos", "metricas"}
     assert all(l["status"] == "sucesso" and l["versao_fact_sales"] == 0 for l in linhas)
+
+
+def test_tudo_roda_cada_etapa_num_processo_e_para_no_erro(monkeypatch, capsys):
+    chamadas = []
+
+    def falso(comando, cwd):
+        chamadas.append(comando)
+        return type("R", (), {"returncode": 1})()
+
+    monkeypatch.setattr(build.subprocess, "run", falso)
+    monkeypatch.setattr(build, "executar", lambda *a, **k: pytest.fail("tudo não roda no mesmo processo"))
+    assert build.main([]) == 1
+    assert chamadas == [[build.sys.executable, "-m", "src.gold.build", "--etapa", "modelos"]]
+    assert "etapas seguintes não rodaram" in capsys.readouterr().out
+
+
+def test_etapa_escolhida_roda_no_mesmo_processo(monkeypatch):
+    monkeypatch.setattr(build.subprocess, "run", lambda *a, **k: pytest.fail("não deveria abrir processo"))
+    monkeypatch.setattr(build, "carregar_config", lambda c: {})
+    monkeypatch.setattr(build, "executar", lambda cfg, etapa: 0 if etapa == "metricas" else 1)
+    assert build.main(["--etapa", "metricas"]) == 0
 
 
 def test_sem_silver_termina_com_1(tmp_path, capsys):
@@ -266,5 +425,6 @@ def test_espiar_le_as_tabelas_da_gold(pronto):
     config = pronto[0]
     assert espiar.main(["gold/models/churn_score", "contagem", "--config", str(config)]) == 0
     assert espiar.main(["gold/features/churn_features", "contagem", "--config", str(config)]) == 0
+    assert espiar.main(["gold/metrics/kpi_filtered", "contagem", "--config", str(config)]) == 0
     assert espiar.main(["gold/_controle_gold", "--config", str(config)]) == 0
     assert espiar.main(["gold/models/nao_existe", "--config", str(config)]) == 2

@@ -16,7 +16,7 @@
 - [x] Desenhar a gold: levantamento em `docs/levantamento_gold.md`, decisões G1–G11, spec em `docs/spec_fase3_gold.md` (29/10/2026)
 - [ ] Construir a gold (fase 3)
   - [x] Parada 3a: features e modelos → `docs/validacao/fase3a_gold.md` (aprovada em 29/10/2026)
-  - [ ] Parada 3b: base comum e métricas → `docs/validacao/fase3b_gold.md`
+  - [x] Parada 3b: base comum e métricas → `docs/validacao/fase3b_gold.md` (aprovada em 30/10/2026, com o ajuste G33)
   - [ ] Parada 3c: exportação e reconciliação
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
 - [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
@@ -586,3 +586,57 @@ retail-lakehouse/
 - **G22. Limitação conhecida: o segmento do backtest do CLV fica fora de `clv_features`.**
   - `clv_features` traz o gasto de cada cliente na janela do backtest (`calibracao_futuro_backtest`), mas não o segmento que o backtest atribui a cada cliente nela.
   - Incluir exigiria mudar o retorno de `clv.backtest`, uma função copiada do RAG. O resultado do backtest por segmento continua em `models/clv_segment` (`backtest_*`).
+
+### Decisões tomadas na construção da parada 3b (29/10/2026)
+> Tomadas pelo Claude seguindo a spec da fase 3. G23–G32 aprovadas pelo Caio em 30/10/2026.
+
+- **G23. Base comum: atributos do produto e dois grãos de cesta.**
+  - `sales_item` ganha `department`, `commodity_desc`, `brand` e `manufacturer`, com `LEFT JOIN` na `dim_product`, como a `vw_vendas_item` do RAG (hoje todo produto vendido está na `dim_product`).
+  - Entram `basket_department` (cesta × departamento) e `basket` (cesta), as regras de `painel.cesta_departamento` e `painel.cestas` reescritas. Ficam materializadas como tabela temporária, porque quase todo cubo as lê.
+  - **Conferido:** os 80 números dos modelos continuam iguais depois da mudança na base.
+- **G24. Macros:**
+  - além das da spec, entram `jaccard` (semelhança entre nós, para as posições da rede) e `lift_index` (lift do subconjunto ÷ lift de todos);
+  - cada macro repete a ordem das operações do SQL do painel publicado (ex.: `lift = n_ab × n ÷ (n_a × n_b)`), para dar o mesmo número em ponto flutuante;
+  - a regra "uma definição por métrica" é testada por texto: **nenhum `/`** no código dos SQL de `sql/gold/metrics/`. Toda razão passa por uma macro.
+- **G25. Métricas sem arredondar, em fração (0–1).**
+  - O arredondamento é da exportação (3c), nas casas do painel publicado.
+  - As variações dos KPIs (`*_growth`) ficam prontas na gold. No painel elas eram calculadas no SQL de exportação; aqui a exportação só renomeia e arredonda.
+- **G26. Tabelas auxiliares não gravadas** (nome com `_` em `sql/gold/metrics/`):
+  - `_item`, `_cut_basket_department`, `_cut_basket`, `_department_group`, `_brand_cut`, `_basket_subcategory` e `_network_pair`;
+  - `_network_pair` (todos os pares dos 80 nós, por período × subconjunto) não vira tabela da gold: gravam-se só os 3 recortes que o painel usa (`network_link`, `network_neighbor`, `network_characteristic`).
+- **G27. Parâmetros das métricas:**
+  - ficam na seção `gold.metricas` do config (períodos, offset diário de 364, segmentos, limites de amostra e da cesta) e entram no SQL como variáveis do DuckDB;
+  - o período `base` é o que não tem semanas, e o período do segmento é o que tem as semanas da janela (26);
+  - ficam escritos no SQL só rótulos do contrato (`'todos'`, `'day'`/`'week'`) e valores do dado (`'Private'`, `'National'`).
+- **G28. Execução em etapas:**
+  - `python -m src.gold.build` roda modelos e depois métricas;
+  - `--etapa modelos` ou `--etapa metricas` roda uma parte só. A etapa de métricas lê `customer_segment` e `churn_score` já gravados na gold e para com código 1 se eles não existirem.
+- **G29. Memória:**
+  - as métricas por produto leem uma cópia enxuta dos itens (`_item`), materializada uma vez, e as auxiliares saem da memória depois do último uso;
+  - com isso, a etapa caiu de 279 s para cerca de 80 s e o pico de 1.161 MB para cerca de 1.000 MB;
+  - **ponto de atenção:** o pico do build completo (1.016–1.032 MB) passa o da silver (~810 MB). O DuckDB respeita o limite de 1 GB do config; o resto é o Python.
+- **G30. Atributos de departamento definidos uma vez:**
+  - `department_segment` calcula os 6 atributos por período × subconjunto × departamento;
+  - `department_profile` (a ficha) lê dela os de `todos` e acrescenta o percentil;
+  - `department_risk` é a única conta do dinheiro em risco (G4).
+- **G31. Ordem das linhas fica para a exportação.** As tabelas não guardam a ordem do contrato (grupos, subconjuntos, departamentos pelo faturamento do período). A 3c ordena; a 3b conferiu o conteúdo pela chave, não a ordem.
+- **G32. `layout.py` copiado sem mudança** para `src/gold/layout.py`, só com o cabeçalho de origem (G9). O texto abaixo do cabeçalho é idêntico ao do painel (conferido).
+
+### Ajuste da revisão da parada 3b (30/10/2026)
+- **G33. `python -m src.gold.build` roda cada etapa num processo próprio** (pedido do Caio na revisão da 3b; complementa G28 e G29).
+  - **Por quê:** a memória que o Python e o DuckDB pegam na etapa de modelos não volta inteira ao sistema enquanto o processo vive. Com um processo por etapa, a memória fica zerada entre elas.
+  - **Como:** sem `--etapa` (ou com `--etapa tudo`), o comando abre `python -m src.gold.build --etapa modelos` e, se der certo, `--etapa metricas`, em sequência. Uma etapa com erro interrompe as seguintes, e o código de saída é 1. `--etapa modelos` / `--etapa metricas` continuam rodando uma parte só, no mesmo processo. `executar(cfg)` em Python (testes, notebook) segue rodando tudo num processo só.
+  - **Processo que orquestra leve:** a linha de comando fica no começo de `build.py`, antes dos imports pesados, e esse processo nunca carrega pandas, DuckDB nem os modelos. Os modelos (scikit-learn e cia.) são importados só dentro das funções da etapa de modelos, então a etapa de métricas também não os carrega.
+  - **Medido nos dados reais** (pico de cada processo, amostrado a cada 0,1 s):
+
+    | | Antes (um processo) | Agora |
+    |---|---:|---:|
+    | Processo que orquestra | – | 16 MB |
+    | Etapa de modelos | – | 633 MB |
+    | Etapa de métricas | – | 870 MB |
+    | **Pico total** | **1.016–1.032 MB** | **885 MB** |
+    | Tempo | 67–82 s | 73 s |
+
+    A primeira tentativa, com os imports no topo, deu pico total de 1.120 MB (orquestrador com 173 MB + métricas com 950 MB): pior que antes. Daí os dois ajustes de imports.
+  - **Resultado igual:** as 33 tabelas da gold ficaram iguais à versão anterior, do processo único. Também conferidos: 39 de 39 arquivos do painel publicado (55.606 linhas), 20 de 20 gabaritos fixos e 80 de 80 números do RAG. Nos testes, a gold sintética é construída uma vez num processo só e outra pela linha de comando; o teste de idempotência compara as duas.
+  - **Ponto de atenção que fica:** a etapa de métricas sozinha ainda chega a 870 MB, acima dos ~810 MB da silver.

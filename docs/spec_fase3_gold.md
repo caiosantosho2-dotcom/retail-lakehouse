@@ -75,17 +75,20 @@ Nenhum número de regra fica escrito no código. A seção `gold` declara:
 
 ## 3. Base comum da gold (uma definição por métrica, regra 4)
 - **`sql/gold/base/*.sql`:** as views de partida, registradas na conexão a cada execução e lidas da silver via `registrar_delta`:
-  - `sales_item`: `fact_sales` só com mercadoria (`is_merchandise`) e semanas até o fim dos dados, com `discount = −(retail_disc + coupon_disc + coupon_match_disc)` e `gross_value = sales_value + discount`;
+  - `sales_item`: `fact_sales` só com mercadoria (`is_merchandise`) e semanas até o fim dos dados, com `discount = −(retail_disc + coupon_disc + coupon_match_disc)` e `gross_value = sales_value + discount`, e os atributos do produto (`department`, `commodity_desc`, `brand`, `manufacturer`; G23);
   - `customer_week`: cestas e faturamento por cliente × semana;
   - `customer_metrics`: as métricas de cliente na janela, equivalentes a `vw_metricas_cliente` do RAG;
-  - `period`: os 4 períodos com semanas e dias, do atual e do ano anterior.
+  - `basket_department` e `basket`: cesta × departamento e cesta (G23);
+  - os 4 períodos ficam em `gold/metrics/dim_period`.
+- **Parâmetros das métricas:** seção `gold.metricas` do config (G27).
 - **`sql/gold/metricas.sql`:** **macros do DuckDB**, uma por métrica. Todo cubo usa a macro e nunca reescreve a conta:
   - `avg_ticket(revenue, baskets)`;
   - `items_per_basket(items, baskets)`;
   - `discount_rate(discount, gross_value)`;
   - `growth(current, prior)`;
   - `penetration`, `frequency`, `share`, `private_label_share`;
-  - `lift`, `confidence`, `support`, `index_vs_all`.
+  - `lift`, `confidence`, `support`, `index_vs_all`;
+  - na construção entraram também `jaccard` e `lift_index` (G24).
 - **Percentuais em fração (0–1)**, como nos contratos. A conversão para 0–100 fica no painel.
 - Gravadas como tabelas em `gold/metrics/`, porque outras tabelas e o painel dependem delas:
 
@@ -153,6 +156,7 @@ Nenhum número de regra fica escrito no código. A seção `gold` declara:
 | `basket_pair` | período × subconjunto × departamento × par | `cesta_subcategorias_<p>.json` | top 10 por lift, ≥ 200 cestas |
 | `concentration` | período × subconjunto | `concentracao.json` | subcategorias que fazem 80% |
 | `network_node` | nó (80) | `rede_nos.json` | x/y de `src/gold/layout.py`, copiado do painel (G9) com cabeçalho de origem |
+| *(auxiliar, G26)* `_network_pair` | período × subconjunto × par de nós | — | base das 3 tabelas abaixo; não é gravada |
 | `network_link` | período × subconjunto × ligação desenhada | `rede_pares_<p>.json` | ligações fixas (3 por nó, 26 s, todos os clientes) |
 | `network_neighbor` | período × subconjunto × nó × par | `rede_vizinhos_<p>.json` | top 10 por lift, ≥ 200 cestas |
 | `network_characteristic` | período × subconjunto (sem `todos`) × par | `rede_caracteristicos_<p>.json` | top 15 por índice |
@@ -179,7 +183,7 @@ Nenhum número de regra fica escrito no código. A seção `gold` declara:
 ## 7. Execução e código
 ```
 python -m src.silver.build        # 1x, para ganhar days_in_week / is_complete_week
-python -m src.gold.build          # modelos e depois métricas; --etapa modelos|metricas para rodar uma parte
+python -m src.gold.build          # modelos e depois métricas, cada etapa num processo próprio (G33); --etapa modelos|metricas para rodar uma parte (G28)
 python -m src.gold.export         # gold → JSONs validados em export/painel_v4/
 python -m src.gold.reconcile      # conferência com o painel publicado + gabaritos fixos
 ```
@@ -227,7 +231,7 @@ python -m src.gold.reconcile      # conferência com o painel publicado + gabari
   - 15 subconjuntos mais `todos`;
   - métricas com um departamento (G10);
   - dinheiro em risco só com `is_high_risk` (G4).
-- **Features (G12):** a entrada do RFM é a padronizada (média 0); cada foto do churn tem o papel certo e o rótulo só fica nulo na final; as variáveis do teste geram as notas da regra simples; o gasto do CLV soma o faturamento da janela.
+- **Features (G12):** a entrada do RFM fica com os valores originais (G21; a padronização é do modelo); cada foto do churn tem o papel certo e o rótulo só fica nulo na final; as variáveis do teste geram as notas da regra simples; o gasto do CLV soma o faturamento da janela.
 - **Modelos:** em dados sintéticos pequenos, só a parte mecânica: colunas, grão, semente (rodar 2 vezes dá o mesmo), `churn` devolve as probabilidades e as notas. **A igualdade com o RAG é provada pela conferência sobre os dados reais, não pelos testes.**
 - **Exportação:**
   - JSON inválido contra o contrato → código 1 e pasta antiga intacta;
