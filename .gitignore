@@ -7,3 +7,4 @@ data/
 lake/
 *.duckdb
 .claude/settings.local.json
+/export/

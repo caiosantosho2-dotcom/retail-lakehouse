@@ -2,7 +2,7 @@
 
 > Registro das decisões do Caio, camada por camada, com o porquê. Formato de **ADR** (Architecture Decision Record): cada decisão diz o que foi decidido, o motivo e o que fica em aberto. Mudou uma decisão? Não apague: marque como "substituída" e escreva a nova.
 
-## To-do e pendências (atualizado em 29/10/2026)
+## To-do e pendências (atualizado em 30/10/2026)
 
 **A fazer (na ordem):**
 - [ ] Terminar o vídeo de arquitetura e encaixar aqui o que fizer sentido
@@ -14,17 +14,20 @@
 - [x] Replanejar o painel antes da gold (Caio, 28/10/2026) → ver "Painel v4" abaixo
 - [x] Decidir como reaproveitar as análises estatísticas do RAG como tabelas gold geradas a partir da silver → G5, G6 (29/10/2026)
 - [x] Desenhar a gold: levantamento em `docs/levantamento_gold.md`, decisões G1–G11, spec em `docs/spec_fase3_gold.md` (29/10/2026)
-- [ ] Construir a gold (fase 3)
+- [x] Construir a gold (fase 3) — concluída em 30/10/2026
   - [x] Parada 3a: features e modelos → `docs/validacao/fase3a_gold.md` (aprovada em 29/10/2026)
   - [x] Parada 3b: base comum e métricas → `docs/validacao/fase3b_gold.md` (aprovada em 30/10/2026, com o ajuste G33)
-  - [ ] Parada 3c: exportação e reconciliação
+  - [x] Parada 3c: exportação e reconciliação → `docs/validacao/fase3c_gold.md` (aprovada em 30/10/2026)
+  - [x] Comando único do pipeline, `python -m src.pipeline` (G42)
+- [ ] **Próximo passo: construir o painel v4** no repositório `retail-bi-dashboard`, como consumidor de `export/painel_v4/` (G43). Isso acontece numa sessão aberta lá; este projeto não altera aquele repositório.
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
 - [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
 
 **Decisões pendentes:**
 - ~~Regras específicas da silver~~ → fechadas na S9 (28/10/2026). Ficam abertos: significado de `A`/`B` no estado civil (S9.9).
 - ~~Toda a camada gold~~ → G1–G11 (29/10/2026)
-- Como o painel e o chat passam a ler da nova arquitetura (ajuste dos nomes para inglês)
+- ~~Como o painel passa a ler da nova arquitetura~~ → G43 (30/10/2026): o painel v4 lê `export/painel_v4/` (contratos 5.0, nomes em português no JSON).
+- Como o chat (projeto de RAG) passa a ler da nova arquitetura (ajuste dos nomes para inglês)
 
 ---
 
@@ -640,3 +643,73 @@ retail-lakehouse/
     A primeira tentativa, com os imports no topo, deu pico total de 1.120 MB (orquestrador com 173 MB + métricas com 950 MB): pior que antes. Daí os dois ajustes de imports.
   - **Resultado igual:** as 33 tabelas da gold ficaram iguais à versão anterior, do processo único. Também conferidos: 39 de 39 arquivos do painel publicado (55.606 linhas), 20 de 20 gabaritos fixos e 80 de 80 números do RAG. Nos testes, a gold sintética é construída uma vez num processo só e outra pela linha de comando; o teste de idempotência compara as duas.
   - **Ponto de atenção que fica:** a etapa de métricas sozinha ainda chega a 870 MB, acima dos ~810 MB da silver.
+
+### Decisões tomadas na construção da parada 3c (30/10/2026)
+> Tomadas pelo Claude seguindo a spec da fase 3 (com os pontos de revisão 1, 2, 3 e 5 da spec aplicados como propostos, "plano aprovado"). Aprovadas pelo Caio em 30/10/2026.
+
+- **G34. Exportação: um SQL por arquivo em `sql/gold/export/`.**
+  - Cada SQL só renomeia as colunas, arredonda nas casas do painel publicado e ordena como o contrato (G31). Nenhuma métrica é calculada.
+  - **Ordem:** onde o painel ordenava pelo valor arredondado (o apelido da coluna exportada), ordena pelo arredondado: `departamentos`, `marcas`, o lift de `cesta_subcategorias` e de `rede_vizinhos`. Onde ordenava pelo valor cheio, ordena pelo cheio: `departamentos_ficha`. O "faturamento do departamento no período" que ordena `subcategorias` e `cesta_subcategorias` vem de `department_profile.revenue`.
+  - **Metodologia (`lab_*`):** sai dos modelos em Python, com as mesmas expressões do exportador do painel (`round` do Python, ÷ 100 de G17), porque o arredondamento do Python e o do DuckDB podem diferir no último dígito.
+  - O corte da regra simples sai inteiro (k, em semanas), como no painel.
+  - **Arquivo de um período sem nenhuma linha:** leva as colunas do contrato. O exportador do painel gravava só as colunas de dimensão e o arquivo falharia no contrato. Achado nos dados sintéticos; nos reais nenhum arquivo fica vazio.
+- **G35. Diferença explicada: a descrição do modelo em `lab_modelo.json`.**
+  - Publicado: "Regressão logística **do RAG**: alerta com risco de 0,17 ou mais…". Exportado: "Regressão logística: alerta com risco de 0,17 ou mais…". O texto vem de `models/churn_classifier` (3a): o modelo agora roda no lakehouse.
+  - Está em `gold.conferencia.excecoes` do config. **Decisão do Caio (30/10/2026):** a descrição fica sem "do RAG", e a diferença fica explicada.
+- **G36. Manifest 5.0** (ponto 3 da spec):
+  - saem `parametros_regioes`, `parametros_migracao` e `minimo_cestas_loja`;
+  - `rag_commit` / `rag_sujo` viram `lakehouse_commit` / `lakehouse_sujo`, o commit e o "tem mudança não commitada" deste repositório;
+  - **entra `silver_versoes`:** a versão Delta das 4 tabelas da silver que a gold lê;
+  - **`base_hash`** = os 12 primeiros caracteres do sha256 de `silver_versoes`. No painel era a versão da base do RAG; aqui muda quando a silver muda.
+  - **A aba `clientes` sai** de `bytes_por_aba` e da lista de cargas: os arquivos dela saíram todos do v4.
+  - `bytes_abertura` soma os 4 `faturamento_tempo` com os outros arquivos da abertura (446.719 bytes, abaixo de 1,5 MB).
+  - **Contas de resumo no manifest:** `corte_medio` (limiar ÷ 2) e as somas do risco por segmento repetem o exportador do painel. São resumo para o painel, não métricas. A cobertura da rede usa a macro `share`.
+  - **Proveniência lida da silver:** `periodo_base` (datas mínima e máxima da `dim_date`) e as versões. É a única leitura da silver na exportação.
+  - A exportação **recusa** uma gold construída com outra versão da `fact_sales` (comparada com o controle da gold) e pede para rodar o build.
+- **G37. `faturamento_tempo_<periodo>.json`** (ponto 1 da spec, como proposto):
+  - colunas `inicio`, `grupo`, `departamento`, `faturamento`, `faturamento_ano_anterior`;
+  - carga `abertura`, formato compacto com as 3 dimensões;
+  - contrato `contracts/faturamento_tempo.schema.json`, gerado do `cubo_faturamento.schema.json` trocando `semana_inicio` por `inicio`;
+  - o `cubo_faturamento.json` não é mais exportado.
+- **G38. Contratos (ponto 2 da spec):**
+  - os 19 contratos dos arquivos que ficam foram copiados para `contracts/` sem mudança (conferido byte a byte);
+  - os 2 novos (`faturamento_tempo`, `manifest` 5.0) foram gerados a partir dos do painel por um script, só com as mudanças acima.
+- **G39. Pastas da exportação em `paths`, não na seção `gold`:**
+  - `paths.export`, `paths.contratos` e `paths.painel_publicado`, porque `paths` é a seção que o `carregar_config` resolve a partir da pasta do config (os testes usam uma pasta temporária);
+  - o `config.example.yaml` leva o caminho relativo `../retail-bi-dashboard/site/data`;
+  - versão do contrato e limite de bytes ficam em `gold.exportacao`; gabaritos e exceções, em `gold.conferencia`;
+  - no `.gitignore` entrou `/export/` (com a barra: `export/` também esconderia `sql/gold/export/`).
+- **G40. Conferência (`reconcile`):**
+  - **Caminho 1:** linha a linha e **na ordem**, com o grão e as colunas. A coluna "pela chave" mostra, para diagnóstico, quantas linhas batem independentemente da posição: separa erro de valor de erro de ordem.
+  - **Igualdade exata:** 7 = 7.0, mas um booleano nunca é igual a um número.
+  - **`faturamento_tempo_26s`** também é comparado com as semanas do `cubo_faturamento.json` publicado que ele cobre (76–101).
+  - **Manifest:** comparam-se só as seções de conteúdo (períodos, modelo, cesta, rede, Metodologia).
+  - **Caminho 2:** refaz os períodos (o fim é a última semana com 7 dias no calendário da silver). Confere os 20 gabaritos (os 15 da spec mais faturamento comparável e do ano anterior de 26 s, variação e dinheiro em risco, já usados na 3b) e os 4 `faturamento_tempo` no grão inteiro (ponto × grupo × departamento).
+  - Uma diferença só passa se estiver em `gold.conferencia.excecoes` (arquivo + coluna + motivo).
+- **G41. Silver sintética dos testes:** o desconto sorteado passa a ser multiplicado por um fator fixo do perfil. O sorteio é o mesmo, e recência, frequência e valor não mudam.
+  - **Por quê:** com desconto igual entre segmentos, o teste de Kruskal-Wallis não dá diferença, o RAG não roda o pós-teste, e `lab_desconto.json` (que exige o p ajustado) e o eta² do manifest (que tem de ser ≥ 0) falham no contrato.
+  - Com o fator, a exportação sintética passa no contrato inteiro.
+
+### Revisão da parada 3c e decisões do Caio (30/10/2026)
+- **G34–G41 aprovadas.** Em G35, o Caio decidiu que a descrição do modelo fica **sem "do RAG"**. A diferença com o painel publicado continua registrada como explicada: no relatório e em `gold.conferencia.excecoes`.
+- **G42. Comando único do pipeline: `python -m src.pipeline`** (pedido do Caio na revisão da 3c).
+  - **O que faz:** roda, em ordem, bronze (`src.bronze.ingest`), silver (`src.silver.build`), gold (`src.gold.build`), exportação (`src.gold.export`) e conferência (`src.gold.reconcile`). Cada etapa roda num processo Python novo, como na G33.
+  - **Erro:** para na primeira etapa com erro e sai com código 1; as etapas seguintes aparecem como "não rodou".
+  - **Resumo:** no fim, mostra o tempo e o status de cada etapa. `--config` passa para todas.
+  - **Leveza:** o processo que orquestra não importa nada pesado.
+  - **Primeira execução completa, nos dados reais** (com o medidor de memória amostrando a cada 0,1 s, o que deixa o build da gold mais lento):
+
+    | Etapa | Tempo | Pico de memória do processo |
+    |---|---:|---:|
+    | bronze | 55 s | 372 MB |
+    | silver | 62 s | 821 MB |
+    | gold build | 166 s (73 s sem o medidor) | modelos 721 MB; métricas 872 MB |
+    | gold export | 29 s | 177 MB |
+    | gold reconcile | 14 s | 792 MB |
+    | **total** | **326 s, código 0** | **maior soma simultânea: 901 MB** |
+
+    A bronze grava a carga do dia (partição `_data_carga` de hoje), e a silver e a gold são reconstruídas a partir dela. A conferência saiu igual à da 3c: 42 de 43 arquivos idênticos, 0 diferenças sem explicação e 20 de 20 gabaritos.
+- **G43. O painel v4 é um consumidor do lakehouse** (decisão do Caio, 30/10/2026). Atualiza R1 e a pendência "como o painel passa a ler da nova arquitetura".
+  - **Onde fica:** o painel v4 continua no repositório `retail-bi-dashboard` e lê os JSONs de `export/painel_v4/` deste projeto. Eles são a interface, com os contratos de `contracts/`, versão 5.0.
+  - **Somente leitura:** este projeto continua sem alterar o `retail-bi-dashboard` (regra 5 do `CLAUDE.md`).
+  - **Como é construído:** o v4 é construído numa sessão aberta lá, que lê daqui. O que o painel precisa mudar (o `faturamento_tempo_<p>.json` no lugar do `cubo_faturamento.json`, o manifest 5.0 e a aba Clientes & Lojas fora) é trabalho daquela sessão.

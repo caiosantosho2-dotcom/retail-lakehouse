@@ -12,6 +12,9 @@ Para as métricas (3b), sem mexer no sorteio (os modelos veem os mesmos valores)
 - produtos: 1 = GROCERY/SOUP (marca própria), 2 = GROCERY/BREAD (nacional), 3 = PRODUCE/FRUIT (nacional; é o produto 2
   das cestas de clientes pares), 9 = não mercadoria;
 - a loja 4 só existe nas semanas 98–101 (as cestas do cliente 1 nelas): não tem ano anterior e não é comparável.
+Para a exportação (3c), com o mesmo sorteio: o desconto sorteado é multiplicado por um fator fixo do perfil, para o
+teste de desconto dar diferença entre segmentos (com segmentos iguais, o RAG não roda o pós-teste e o contrato
+lab_desconto, que exige o p ajustado, não fecha). Recência, frequência e valor não mudam.
 """
 from __future__ import annotations
 
@@ -29,6 +32,7 @@ DIAS_ULTIMA_SEMANA = 3
 PRODUTOS = {1: ("GROCERY", "SOUP", "Private", 69), 2: ("GROCERY", "BREAD", "National", 10),
             3: ("PRODUCE", "FRUIT", "National", 20), 9: ("KIOSK-GAS", "GASOLINE", "National", 30)}
 LOJA_NOVA, CLIENTE_LOJA_NOVA, SEMANA_LOJA_NOVA = 4, 1, 98
+FATOR_DESCONTO = {"fiel": 1.0, "regular": 0.6, "esporadico": 0.3, "pausa": 0.1, "antigo": 1.0}
 
 
 def compra(perfil: str, semana: int, rng: np.random.Generator, prob: float) -> bool:
@@ -59,7 +63,7 @@ def gerar(lake: Path, semente: int = 7) -> dict:
                     if produto == 9 and rng.random() > 0.1:
                         continue
                     valor = round(float(ticket * rng.uniform(0.3, 0.7)), 2)
-                    desc = round(-valor * float(rng.uniform(0, 0.3)), 2)
+                    desc = round(-valor * float(rng.uniform(0, 0.3)) * FATOR_DESCONTO[perfil], 2)
                     if produto == 2 and hh % 2 == 0:
                         produto = 3
                     for c, v in (("household_key", hh), ("basket_id", cesta), ("store_id", loja),

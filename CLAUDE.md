@@ -40,7 +40,10 @@ python -m src.silver.build                         # reconstrói a silver (clean
 python scripts/espiar.py silver/context/sales/fact_sales contagem   # silver: clean/<t>, context/<assunto>/<t>, _rejected/<t>, _controle_silver
 python -m src.gold.build                          # gold a partir da silver: modelos e depois métricas, cada etapa num processo próprio (G33); sai com 1 em erro
 python -m src.gold.build --etapa metricas         # só as métricas, neste processo (lê os modelos já gravados); --etapa modelos = só os modelos
+python -m src.gold.export                         # gold -> JSONs do painel v4 em export/painel_v4/ (validados em contracts/); sai com 1 e mantém a pasta antiga se algo falhar
+python -m src.gold.reconcile                      # confere a exportação com o painel publicado e os gabaritos do config; sai com 1 em diferença sem explicação
 python scripts/espiar.py gold/models/churn_score contagem   # gold: features/<t>, models/<t>, metrics/<t>, _controle_gold
+python -m src.pipeline                            # tudo em ordem: bronze, silver, gold build, export, reconcile (um processo por etapa); para no 1º erro com código 1 e mostra tempo e status de cada etapa
 python -m pytest -q                                # testes (CSVs mínimos em pasta temporária)
 jupyter nbconvert --to notebook --execute --inplace notebooks/explorando_lakehouse.ipynb   # roda o tour e salva com saídas
 ```
@@ -49,5 +52,6 @@ jupyter nbconvert --to notebook --execute --inplace notebooks/explorando_lakehou
 - DuckDB 2.0: relação não tem mais `fetchone()` (usar `fetchall()`) e `fetch_record_batch()` virou `to_arrow_reader()`. Depois de `execute(...).fetchone()` na conexão, use `execute` (não `sql`) na mesma conexão.
 - Gold: base comum em `sql/gold/base/*.sql` (views sobre a silver); modelos copiados do RAG em `src/gold/modelos/` (cabeçalho com origem e adaptações), parâmetros na seção `gold` do config.
 - Métricas: um SQL por tabela em `sql/gold/metrics/` (nome com `_` = auxiliar, não gravada), ordem e tipo em `METRICAS` de `src/gold/build.py`; toda razão usa uma macro de `sql/gold/metricas.sql` (nenhum `/` nos SQL dos cubos, há teste); parâmetros em `gold.metricas` como variáveis do DuckDB.
+- Exportação: um SQL por JSON em `sql/gold/export/` (só renomeia, arredonda e ordena; nenhuma conta), lista e ordem em `ARQUIVOS` de `src/gold/export.py`; contratos em `contracts/` (5.0); pastas em `paths` (`export`, `contratos`, `painel_publicado`); gabaritos e exceções explicadas em `gold.conferencia`.
 
 *(comandos da silver e da gold entram aqui conforme forem criados)*

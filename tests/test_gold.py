@@ -6,8 +6,10 @@ macros, grão e colunas, semente, controle).
 """
 from __future__ import annotations
 
+import dataclasses
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 
 import pyarrow as pa
@@ -16,7 +18,7 @@ import yaml
 from deltalake import DeltaTable, write_deltalake
 
 from src.comum import RAIZ, caminho_tabela, carregar_config, registrar_delta
-from src.gold import build
+from src.gold import build, export, reconcile
 from src.gold.modelos import parametros
 from tests.gold_sintetico import gerar
 
@@ -36,7 +38,8 @@ SEGMENTOS = {"Fiéis", "Regulares", "Esporádicos", "Em pausa"}
 def montar_config(pasta: Path) -> Path:
     """Config com a seção gold real (config.example.yaml) e o lake em `pasta`."""
     real = yaml.safe_load((RAIZ / "config.example.yaml").read_text(encoding="utf-8"))
-    real["paths"] = {"raw": "raw", "lake": "lake"}
+    real["paths"] = {"raw": "raw", "lake": "lake", "export": "export/painel_v4", "contratos": str(RAIZ / "contracts"),
+                     "painel_publicado": "publicado"}
     real["duckdb"] = {"memory_limit": "256MB", "threads": 1}
     caminho = pasta / "config.yaml"
     caminho.write_text(yaml.safe_dump(real, allow_unicode=True), encoding="utf-8")
@@ -428,3 +431,116 @@ def test_espiar_le_as_tabelas_da_gold(pronto):
     assert espiar.main(["gold/metrics/kpi_filtered", "contagem", "--config", str(config)]) == 0
     assert espiar.main(["gold/_controle_gold", "--config", str(config)]) == 0
     assert espiar.main(["gold/models/nao_existe", "--config", str(config)]) == 2
+
+
+# ---------------------------------------------------------------- exportação e conferência (3c)
+
+@pytest.fixture(scope="module")
+def exportado(pronto) -> Path:
+    """A exportação da gold sintética (uma vez por módulo)."""
+    config = pronto[0]
+    assert export.main(["--config", str(config)]) == 0
+    return config
+
+
+def foto(pasta: Path) -> dict:
+    return {p.name: p.read_bytes() for p in sorted(pasta.glob("*.json"))}
+
+
+def test_compactar_ida_e_volta_feito_a_mao():
+    linhas = [{"periodo": "4s", "grupo": "Fiéis", "valor": 1.5}, {"periodo": "4s", "grupo": "Regulares", "valor": None},
+              {"periodo": "13s", "grupo": "Fiéis", "valor": 2}]
+    dado = export.compactar("teste", linhas, ("periodo", "grupo"))
+    assert dado["dimensoes"] == {"periodo": ["4s", "13s"], "grupo": ["Fiéis", "Regulares"]}
+    assert dado["linhas"] == [[0, 0, 1.5], [0, 1, None], [1, 0, 2]]
+    assert export.expandir(dado) == linhas
+
+
+def test_exportacao_valida_todos_os_arquivos_e_o_manifest(exportado, cfg):
+    pasta = cfg["paths"]["export"]
+    nomes = [n for _, n, _ in export.nomes_arquivos(cfg)]
+    assert len(nomes) == 47 and set(foto(pasta)) == {*nomes, "manifest.json"}
+    assert export.validar(pasta, cfg) == []
+    m = json.loads((pasta / "manifest.json").read_text(encoding="utf-8"))
+    assert m["versao_contrato"] == "5.0" and [a["nome"] for a in m["arquivos"]] == nomes
+    assert m["silver_versoes"] == {t: 0 for t in build.SILVER.values()}
+    assert not any(pasta.parent.glob("*.tmp")) and not any(pasta.parent.glob("*.old"))
+
+
+def test_formato_compacto_ida_e_volta_nos_arquivos(exportado, cfg):
+    for a, nome, _ in export.nomes_arquivos(cfg):
+        dado = json.loads((cfg["paths"]["export"] / nome).read_text(encoding="utf-8"))
+        if a.dimensoes:
+            assert export.compactar(dado["grao"], export.expandir(dado), a.dimensoes, dado["colunas"]) == dado, nome
+
+
+def test_exportacao_sem_metrica_no_codigo_so_renomeia_e_arredonda(exportado, cfg, con):
+    """O KPI exportado é o da gold arredondado: nenhuma conta nova na exportação."""
+    k = {(l["periodo"], l["subconjunto"], l["departamento"]): l
+         for l in export.expandir(json.loads((cfg["paths"]["export"] / "kpis_filtrados.json").read_text(encoding="utf-8")))}
+    for periodo, subset, dep, ticket, crescimento in con.execute(
+            "SELECT period, subset, department, avg_ticket, avg_ticket_growth FROM kpi_filtered").fetchall():
+        assert k[(periodo, subset, dep)]["ticket_medio"] == (None if ticket is None else round(ticket, 2))
+        assert k[(periodo, subset, dep)]["ticket_medio_variacao_pct"] == (None if crescimento is None else round(crescimento, 4))
+
+
+def test_json_invalido_termina_com_1_e_a_pasta_antiga_fica(exportado, cfg, monkeypatch, capsys):
+    pasta = cfg["paths"]["export"]
+    antes = foto(pasta)
+    arquivos = [dataclasses.replace(export.ARQUIVOS[0], grao=""), *export.ARQUIVOS[1:]]   # grao vazio fere o contrato
+    monkeypatch.setattr(export, "ARQUIVOS", arquivos)
+    assert export.main(["--config", str(exportado)]) == 1
+    assert "departamentos.json: grao" in capsys.readouterr().out
+    assert foto(pasta) == antes
+    assert not any(pasta.parent.glob("*.tmp"))
+
+
+def test_gold_de_outra_versao_da_silver_nao_exporta(exportado, monkeypatch, capsys):
+    monkeypatch.setattr(export, "silver_versoes", lambda cfg: {t: 1 for t in build.SILVER.values()})
+    assert export.main(["--config", str(exportado)]) == 1
+    assert "rode `python -m src.gold.build`" in capsys.readouterr().out
+
+
+def test_igualdade_da_conferencia():
+    assert reconcile.igual(7, 7.0) and reconcile.igual(None, None) and reconcile.igual({"a": [1, 2]}, {"a": [1, 2.0]})
+    assert not reconcile.igual(True, 1) and not reconcile.igual(0.1 + 0.2, 0.3)
+    assert not reconcile.igual({"a": 1, "b": 2}, {"b": 2, "a": 1})   # a ordem das colunas faz parte do contrato
+
+
+def test_conferencia_acusa_valor_e_ordem_e_aceita_excecao_registrada(exportado, cfg):
+    """Publicado = cópia do exportado: tudo igual. Depois um valor e uma ordem estragados no publicado."""
+    exp, pub = cfg["paths"]["export"], cfg["paths"]["painel_publicado"]
+    shutil.rmtree(pub, ignore_errors=True)
+    shutil.copytree(exp, pub)
+    cubo = json.loads((exp / "faturamento_tempo_26s.json").read_text(encoding="utf-8"))
+    cubo["colunas"] = ["semana_inicio" if c == "inicio" else c for c in cubo["colunas"]]
+    cubo["dimensoes"] = {("semana_inicio" if k == "inicio" else k): v for k, v in cubo["dimensoes"].items()}
+    (pub / "cubo_faturamento.json").write_text(json.dumps(cubo, ensure_ascii=False), encoding="utf-8")
+    r = reconcile.caminho_1(cfg)
+    assert all(not x["diferencas"] for x in r) and all(x["bytes_iguais"] in (True, None) for x in r)
+
+    k = json.loads((pub / "kpis_filtrados.json").read_text(encoding="utf-8"))
+    col = k["colunas"].index("cestas")
+    k["linhas"][0][col] += 1
+    (pub / "kpis_filtrados.json").write_text(json.dumps(k, ensure_ascii=False), encoding="utf-8")
+    d = json.loads((pub / "lab_desconto.json").read_text(encoding="utf-8"))
+    d["linhas"][0], d["linhas"][1] = d["linhas"][1], d["linhas"][0]
+    (pub / "lab_desconto.json").write_text(json.dumps(d, ensure_ascii=False), encoding="utf-8")
+    r = {x["arquivo"]: x for x in reconcile.caminho_1(cfg)}
+    assert [(i, c) for i, c, _, _ in r["kpis_filtrados.json"]["sem_explicacao"]] == [(0, "cestas")]
+    assert r["lab_desconto.json"]["iguais"] == 4 and r["lab_desconto.json"]["iguais_pela_chave"] == 6   # só a ordem
+
+    cfg["gold"]["conferencia"]["excecoes"] = [{"arquivo": "kpis_filtrados.json", "coluna": "cestas", "motivo": "teste"}]
+    r = {x["arquivo"]: x for x in reconcile.caminho_1(cfg)}
+    assert r["kpis_filtrados.json"]["diferencas"] and not r["kpis_filtrados.json"]["sem_explicacao"]
+
+
+def test_faturamento_tempo_exportado_bate_com_sql_proprio(exportado, cfg):
+    c = reconcile.Caminho2(cfg)
+    try:
+        for p in c.periodos:
+            linhas = export.expandir(json.loads((cfg["paths"]["export"] / f"faturamento_tempo_{p}.json").read_text(encoding="utf-8")))
+            t = c.faturamento_tempo(p, linhas)
+            assert t["iguais"] == t["proprio"] == t["exportado"] > 0, t
+    finally:
+        c.con.close()

@@ -2,6 +2,9 @@
 paths:
   raw: data/raw
   lake: lake
+  export: export/painel_v4      # JSONs do painel v4 (fora do git); a exportação troca a pasta inteira
+  contratos: contracts          # .schema.json de cada arquivo exportado
+  painel_publicado: ../retail-bi-dashboard/site/data   # painel publicado, só leitura, só para a conferência
 
 # Limites do DuckDB: notebook com pouca memória.
 duckdb:
@@ -163,6 +166,38 @@ gold:
       vizinhos_por_no: 10
       caracteristicos: 15
       concentracao: 0.80             # quantas subcategorias (e fabricantes) fazem 80% do faturamento
+  exportacao:                   # python -m src.gold.export (spec, seção 6)
+    versao_contrato: "5.0"
+    limite_bytes: 1572864       # 1,5 MB: o que o navegador baixa na abertura e em cada aba × período
+  conferencia:                  # python -m src.gold.reconcile (spec, seção 8)
+    # Caminho 2: gabaritos fixos, recalculados por SQL próprio direto da silver; comparados nas casas indicadas.
+    gabaritos:
+      - {nome: ticket_medio_base, valor: 29.3813, casas: 4}
+      - {nome: ticket_medio_26s, valor: 31.2097, casas: 4}
+      - {nome: itens_por_cesta_base, valor: 13.3227, casas: 4}
+      - {nome: desconto_base, valor: 0.161294, casas: 6}
+      - {nome: lojas_comparaveis_4s, valor: 123, casas: 0}
+      - {nome: lojas_comparaveis_13s, valor: 160, casas: 0}
+      - {nome: lojas_comparaveis_26s, valor: 214, casas: 0}
+      - {nome: faturamento_comparavel_26s, valor: 2068074.67, casas: 2}
+      - {nome: faturamento_ano_anterior_26s, valor: 1999776.43, casas: 2}
+      - {nome: variacao_26s, valor: 0.0342, casas: 4}
+      - {nome: clientes_ativos, valor: 2205, casas: 0}
+      - {nome: clientes_ativos_ano_anterior, valor: 2138, casas: 0}
+      - {nome: fieis_clientes_pct, valor: 0.35, casas: 2}
+      - {nome: fieis_faturamento_pct, valor: 0.71, casas: 2}
+      - {nome: auc_modelo, valor: 0.8531, casas: 4}
+      - {nome: auc_regra_simples, valor: 0.7378, casas: 4}
+      - {nome: limiar, valor: 0.17, casas: 2}
+      - {nome: alertas, valor: 243, casas: 0}
+      - {nome: pausas_esperadas, valor: 135.952, casas: 3}
+      - {nome: dinheiro_em_risco_26s, valor: 41140.15, casas: 2}
+    # Caminho 1: diferenças com o painel publicado que têm explicação registrada (documento de decisões). Uma diferença
+    # fora desta lista faz o reconcile terminar com código 1.
+    excecoes:
+      - arquivo: lab_modelo.json
+        coluna: descricao
+        motivo: "G35: a descrição do modelo na gold não diz 'do RAG' (o modelo agora roda no lakehouse)"
   modelos:                      # parâmetros copiados de C:\RAG_Varejo\config.yaml (analises), commit fffb207, sem mudança (G6)
     rfm:
       k_avaliados: [2, 3, 4, 5, 6, 7, 8]

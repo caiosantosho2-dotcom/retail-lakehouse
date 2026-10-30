@@ -72,6 +72,7 @@ Nenhum número de regra fica escrito no código. A seção `gold` declara:
   - pasta dos contratos: `contracts/`;
   - pasta do painel publicado, usada só pela conferência e só para leitura: `C:\retail-bi-dashboard\site\data`. Esse caminho fica só no `config.yaml`; o `config.example.yaml` leva um caminho genérico.
 - **Gabaritos fixos** (seção 8) com o valor esperado de cada um.
+- *(na construção: as três pastas ficaram em `paths` — `export`, `contratos`, `painel_publicado` —, a versão do contrato e o limite de bytes em `gold.exportacao`, e gabaritos e exceções em `gold.conferencia`: G39)*
 
 ## 3. Base comum da gold (uma definição por métrica, regra 4)
 - **`sql/gold/base/*.sql`:** as views de partida, registradas na conexão a cada execução e lidas da silver via `registrar_delta`:
@@ -175,6 +176,7 @@ Nenhum número de regra fica escrito no código. A seção `gold` declara:
 - **Contratos:** copiar para `contracts/` deste projeto os `.schema.json` dos arquivos que ficam, sem alterar.
   - Novo: `faturamento_tempo.schema.json` (G2/G3).
   - Ajustado: `manifest.schema.json`. Saem `parametros_regioes`, `parametros_migracao` e `minimo_cestas_loja`. `rag_commit` vira `lakehouse_commit` mais as versões da silver lidas.
+  - Na construção (G36–G38): `lakehouse_sujo`, `silver_versoes`, `base_hash` a partir delas e a aba `clientes` fora de `bytes_por_aba`. Os SQL de cada arquivo ficam em `sql/gold/export/` (G34).
 - **Validação:**
   - todo JSON gravado é validado contra o seu contrato;
   - se um arquivo falhar, a exportação para com código 1, e a pasta só é trocada se todos passarem.

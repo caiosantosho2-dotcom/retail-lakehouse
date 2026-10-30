@@ -1,0 +1,721 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "manifest.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "versao_contrato",
+    "gerado_em",
+    "base_hash",
+    "periodo_base",
+    "janelas",
+    "lakehouse_commit",
+    "lakehouse_sujo",
+    "silver_versoes",
+    "modelo",
+    "parametros_cesta",
+    "parametros_rede",
+    "parametros_laboratorio",
+    "bytes_abertura",
+    "bytes_por_aba",
+    "arquivos"
+  ],
+  "properties": {
+    "versao_contrato": {
+      "const": "5.0"
+    },
+    "gerado_em": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "base_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{12}$"
+    },
+    "periodo_base": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inicio",
+        "fim"
+      ],
+      "properties": {
+        "inicio": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "fim": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        }
+      }
+    },
+    "janelas": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "4s",
+        "13s",
+        "26s",
+        "base"
+      ],
+      "properties": {
+        "4s": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "semana_ini",
+            "semana_fim",
+            "data_ini",
+            "data_fim"
+          ],
+          "properties": {
+            "semana_ini": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "semana_fim": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "data_ini": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "data_fim": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        },
+        "13s": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "semana_ini",
+            "semana_fim",
+            "data_ini",
+            "data_fim"
+          ],
+          "properties": {
+            "semana_ini": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "semana_fim": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "data_ini": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "data_fim": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        },
+        "26s": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "semana_ini",
+            "semana_fim",
+            "data_ini",
+            "data_fim"
+          ],
+          "properties": {
+            "semana_ini": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "semana_fim": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "data_ini": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "data_fim": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        },
+        "base": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "semana_ini",
+            "semana_fim",
+            "data_ini",
+            "data_fim"
+          ],
+          "properties": {
+            "semana_ini": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "semana_fim": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "data_ini": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "data_fim": {
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            }
+          }
+        }
+      }
+    },
+    "lakehouse_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "lakehouse_sujo": {
+      "type": "boolean"
+    },
+    "silver_versoes": {
+      "type": "object",
+      "minProperties": 1,
+      "description": "versão Delta de cada tabela da silver lida pela gold (caminho dentro de lake/silver)",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      }
+    },
+    "modelo": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "limiar_alerta",
+        "corte_medio",
+        "auc_modelo",
+        "auc_regra_simples",
+        "pausas_esperadas",
+        "clientes_ativos",
+        "alertas",
+        "risco_por_segmento"
+      ],
+      "properties": {
+        "limiar_alerta": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "corte_medio": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "auc_modelo": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "auc_regra_simples": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "pausas_esperadas": {
+          "type": "number",
+          "minimum": 0
+        },
+        "clientes_ativos": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "alertas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "risco_por_segmento": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "segmento",
+              "clientes",
+              "pausas_esperadas",
+              "alertas"
+            ],
+            "properties": {
+              "segmento": {
+                "type": "string"
+              },
+              "clientes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "pausas_esperadas": {
+                "type": "number",
+                "minimum": 0
+              },
+              "alertas": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "parametros_cesta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "semana_ini",
+        "semana_fim",
+        "minimo_cestas_par"
+      ],
+      "properties": {
+        "semana_ini": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "semana_fim": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "minimo_cestas_par": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "parametros_rede": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rede_subcategorias",
+        "rede_ligacoes_por_no",
+        "rede_caracteristicos",
+        "cobertura_faturamento_pct",
+        "ligacoes_desenhadas",
+        "posicoes"
+      ],
+      "properties": {
+        "rede_subcategorias": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rede_ligacoes_por_no": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "rede_caracteristicos": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cobertura_faturamento_pct": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "ligacoes_desenhadas": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "posicoes": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "parametros_laboratorio": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "risco",
+        "clv",
+        "desconto"
+      ],
+      "properties": {
+        "risco": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "definicao",
+            "horizonte_semanas",
+            "periodo_teste",
+            "linhas_teste",
+            "prevalencia_teste_pct",
+            "diferenca_auc",
+            "diferenca_auc_ic",
+            "conclusao"
+          ],
+          "properties": {
+            "definicao": {
+              "type": "string",
+              "minLength": 1
+            },
+            "horizonte_semanas": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "periodo_teste": {
+              "type": "string",
+              "minLength": 1
+            },
+            "linhas_teste": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "prevalencia_teste_pct": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "diferenca_auc": {
+              "type": "number"
+            },
+            "diferenca_auc_ic": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "conclusao": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "clv": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "households",
+            "clv_total",
+            "clv_total_ic",
+            "receita_esperada_total",
+            "margem",
+            "horizonte_semanas",
+            "metodo",
+            "backtest_horizonte_semanas",
+            "backtest_erro_metodo_pct",
+            "backtest_erro_ingenuo_pct",
+            "backtest_grupos_em_que_ganha",
+            "backtest_grupos",
+            "conclusao"
+          ],
+          "properties": {
+            "households": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "clv_total": {
+              "type": "number",
+              "minimum": 0
+            },
+            "clv_total_ic": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            },
+            "receita_esperada_total": {
+              "type": "number",
+              "minimum": 0
+            },
+            "margem": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "horizonte_semanas": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "metodo": {
+              "type": "string",
+              "minLength": 1
+            },
+            "backtest_horizonte_semanas": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "backtest_erro_metodo_pct": {
+              "type": "number"
+            },
+            "backtest_erro_ingenuo_pct": {
+              "type": "number"
+            },
+            "backtest_grupos_em_que_ganha": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "backtest_grupos": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "conclusao": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "desconto": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "households",
+            "kruskal_h",
+            "p_valor",
+            "significativo",
+            "eta_quadrado",
+            "eta_quadrado_relevante",
+            "alfa",
+            "diferenca_relevante_pp",
+            "veredito",
+            "desconto_total",
+            "taxa_geral_pct",
+            "economia_se_igualar",
+            "conclusao",
+            "evidencia",
+            "acao_recomendada"
+          ],
+          "properties": {
+            "households": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "kruskal_h": {
+              "type": "number",
+              "minimum": 0
+            },
+            "p_valor": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "significativo": {
+              "type": "boolean"
+            },
+            "eta_quadrado": {
+              "type": "number",
+              "minimum": 0
+            },
+            "eta_quadrado_relevante": {
+              "type": "number",
+              "minimum": 0
+            },
+            "alfa": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "diferenca_relevante_pp": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "veredito": {
+              "type": "string",
+              "minLength": 1
+            },
+            "desconto_total": {
+              "type": "number",
+              "minimum": 0
+            },
+            "taxa_geral_pct": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "economia_se_igualar": {
+              "type": "number",
+              "minimum": 0
+            },
+            "conclusao": {
+              "type": "string",
+              "minLength": 1
+            },
+            "evidencia": {
+              "type": "string",
+              "minLength": 1
+            },
+            "acao_recomendada": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        }
+      }
+    },
+    "bytes_abertura": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1572864
+    },
+    "bytes_por_aba": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "por aba × período: os arquivos fixos da aba mais os do período (redesenho v3)",
+      "required": [
+        "categoria",
+        "produtos",
+        "laboratorio"
+      ],
+      "properties": {
+        "categoria": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "4s",
+            "13s",
+            "26s",
+            "base"
+          ],
+          "properties": {
+            "4s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "13s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "26s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "base": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            }
+          }
+        },
+        "produtos": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "4s",
+            "13s",
+            "26s",
+            "base"
+          ],
+          "properties": {
+            "4s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "13s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "26s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "base": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            }
+          }
+        },
+        "laboratorio": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "4s",
+            "13s",
+            "26s",
+            "base"
+          ],
+          "properties": {
+            "4s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "13s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "26s": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            },
+            "base": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1572864
+            }
+          }
+        }
+      }
+    },
+    "arquivos": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "nome",
+          "carga",
+          "linhas",
+          "bytes",
+          "sha256"
+        ],
+        "properties": {
+          "nome": {
+            "type": "string"
+          },
+          "carga": {
+            "enum": [
+              "abertura",
+              "categoria",
+              "produtos",
+              "laboratorio"
+            ]
+          },
+          "linhas": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "periodo": {
+            "enum": [
+              "4s",
+              "13s",
+              "26s",
+              "base"
+            ],
+            "description": "só nos arquivos por período"
+          }
+        }
+      }
+    }
+  }
+}
