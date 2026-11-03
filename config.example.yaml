@@ -4,7 +4,7 @@ paths:
   lake: lake
   export: export/painel_v4      # JSONs do painel v4 (fora do git); a exportação troca a pasta inteira
   contratos: contracts          # .schema.json de cada arquivo exportado
-  painel_publicado: ../retail-bi-dashboard/site/data   # painel publicado, só leitura, só para a conferência
+  painel_publicado: data/gabarito/painel_v3   # gabarito congelado: site/data da tag v3-rag do painel (G44), só para a conferência
 
 # Limites do DuckDB: notebook com pouca memória.
 duckdb:

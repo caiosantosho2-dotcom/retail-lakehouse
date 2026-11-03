@@ -1,7 +1,8 @@
 """Conferência: `python -m src.gold.reconcile` (spec da fase 3, seção 8; regra 3 e G6: igualdade, não tolerância).
 
-Caminho 1, painel publicado (`paths.painel_publicado`, só leitura): cada JSON exportado que existe no painel é comparado
-com o publicado linha a linha, na ordem, valor a valor, depois de expandir o formato compacto (grão e colunas também).
+Caminho 1, painel publicado, congelado na tag v3-rag (`paths.painel_publicado`, G44: nunca o site/data vivo do painel,
+que desde o v4 é cópia desta exportação): cada JSON exportado que existe lá é comparado com o publicado linha a linha,
+na ordem, valor a valor, depois de expandir o formato compacto (grão e colunas também).
 Diferença só passa se estiver em `gold.conferencia.excecoes` (com o motivo registrado no documento de decisões).
 - faturamento_tempo_<p>.json não existe no publicado: o de 26 s é comparado com as semanas do cubo_faturamento.json
   publicado que ele cobre, e os quatro são refeitos pelo caminho 2.

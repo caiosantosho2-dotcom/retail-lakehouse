@@ -2,7 +2,7 @@
 
 > Registro das decisões do Caio, camada por camada, com o porquê. Formato de **ADR** (Architecture Decision Record): cada decisão diz o que foi decidido, o motivo e o que fica em aberto. Mudou uma decisão? Não apague: marque como "substituída" e escreva a nova.
 
-## To-do e pendências (atualizado em 30/10/2026)
+## To-do e pendências (atualizado em 03/11/2026)
 
 **A fazer (na ordem):**
 - [ ] Terminar o vídeo de arquitetura e encaixar aqui o que fizer sentido
@@ -19,6 +19,7 @@
   - [x] Parada 3b: base comum e métricas → `docs/validacao/fase3b_gold.md` (aprovada em 30/10/2026, com o ajuste G33)
   - [x] Parada 3c: exportação e reconciliação → `docs/validacao/fase3c_gold.md` (aprovada em 30/10/2026)
   - [x] Comando único do pipeline, `python -m src.pipeline` (G42)
+  - [x] Conferência contra o gabarito congelado do painel v3 (G44, 03/11/2026)
 - [ ] **Próximo passo: construir o painel v4** no repositório `retail-bi-dashboard`, como consumidor de `export/painel_v4/` (G43). Isso acontece numa sessão aberta lá; este projeto não altera aquele repositório.
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
 - [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
@@ -676,7 +677,7 @@ retail-lakehouse/
   - os 2 novos (`faturamento_tempo`, `manifest` 5.0) foram gerados a partir dos do painel por um script, só com as mudanças acima.
 - **G39. Pastas da exportação em `paths`, não na seção `gold`:**
   - `paths.export`, `paths.contratos` e `paths.painel_publicado`, porque `paths` é a seção que o `carregar_config` resolve a partir da pasta do config (os testes usam uma pasta temporária);
-  - o `config.example.yaml` leva o caminho relativo `../retail-bi-dashboard/site/data`;
+  - ~~o `config.example.yaml` leva o caminho relativo `../retail-bi-dashboard/site/data`~~ → substituído pela G44 (03/11/2026): `paths.painel_publicado` aponta para `data/gabarito/painel_v3`;
   - versão do contrato e limite de bytes ficam em `gold.exportacao`; gabaritos e exceções, em `gold.conferencia`;
   - no `.gitignore` entrou `/export/` (com a barra: `export/` também esconderia `sql/gold/export/`).
 - **G40. Conferência (`reconcile`):**
@@ -713,3 +714,12 @@ retail-lakehouse/
   - **Onde fica:** o painel v4 continua no repositório `retail-bi-dashboard` e lê os JSONs de `export/painel_v4/` deste projeto. Eles são a interface, com os contratos de `contracts/`, versão 5.0.
   - **Somente leitura:** este projeto continua sem alterar o `retail-bi-dashboard` (regra 5 do `CLAUDE.md`).
   - **Como é construído:** o v4 é construído numa sessão aberta lá, que lê daqui. O que o painel precisa mudar (o `faturamento_tempo_<p>.json` no lugar do `cubo_faturamento.json`, o manifest 5.0 e a aba Clientes & Lojas fora) é trabalho daquela sessão.
+
+### Conferência depois do painel v4 (03/11/2026)
+- **G44. A conferência compara com um gabarito congelado do painel v3** (decisão do Caio, 03/11/2026). Substitui o caminho de `paths.painel_publicado` da G39.
+  - **Problema:** o painel v4 trocou `C:\retail-bi-dashboard\site\data` pelos JSONs deste projeto. O `reconcile` quebrou com código 1, porque o `cubo_faturamento.json` saiu de lá.
+  - **Por que não bastava restaurar o arquivo:** a pasta agora é uma cópia da nossa própria exportação. Comparar com ela seria comparar a exportação com ela mesma: daria tudo igual mesmo com a gold errada. O gabarito precisa ser independente e não pode mudar.
+  - **Decisão:** `paths.painel_publicado` aponta para `data/gabarito/painel_v3/`, o `site/data` da tag `v3-rag` do `retail-bi-dashboard` (commit `dc69cc1`, de 26/10/2026, contrato 4.0), a última versão gerada pelo projeto de RAG. A extração só leu o outro repositório (`git archive`): a pasta de trabalho dele continuou limpa, no branch `v4-lakehouse`.
+  - **Integridade da cópia:** 64 de 64 arquivos iguais ao blob do git na tag, e 62 de 62 sha256 iguais ao manifest da própria tag.
+  - **Fora do git:** a pasta fica sob `data/`, como os outros dados (5,8 MB). O código e o config de exemplo só guardam o caminho. Num clone novo, os comandos para recriá-la estão no `CLAUDE.md`; se ela faltar, a conferência sai com código 1 em vez de passar.
+  - **Resultado, `python -m src.pipeline` nos dados reais:** código 0 em 205 s (bronze 14 s, silver 31 s, gold build 120 s, export 26 s, reconcile 14 s). A conferência é a mesma de antes: 42 de 43 arquivos idênticos, 54.130 de 54.131 linhas, 0 diferenças sem explicação (só a G35) e 20 de 20 gabaritos. Testes: 121 passam.
