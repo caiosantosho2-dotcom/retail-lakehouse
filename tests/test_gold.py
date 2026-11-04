@@ -659,6 +659,32 @@ def test_crm_valor_capturado_a_mao_nos_dois_objetivos_e_zero_quando_nao_acerta()
         confere(1, objetivo, "baseline", (300 + 0) / 2, (300 / 310 + 0) / 2)
 
 
+def test_crm_calibracao_no_teste_a_mao_por_objetivo_e_nula_na_regra_simples():
+    final = [(1, 0.5, 100.0, "Fiéis")]
+    teste = [
+        # foto 85: notas 0,9 (pausou, US$ 10), 0,5 (não, US$ 100), 0,1 (pausou, US$ 300). Prioridades: 9, 50 e 30.
+        (1, 85, 1, 0.9, 1, 10.0), (2, 85, 0, 0.5, 2, 100.0), (3, 85, 1, 0.1, 3, 300.0),
+        # foto 93: notas 0,8 (pausou, US$ 100), 0,2 (não, US$ 100). Prioridades: 80 e 20.
+        (1, 93, 1, 0.8, 1, 100.0), (2, 93, 0, 0.2, 2, 100.0),
+    ]
+    r = _crm(final, teste, [1, 2])
+    def confere(n, objetivo, esperadas, reais):
+        linha = r[(n, objetivo, "model")]
+        assert abs(linha["hist_pauses_expected"] - esperadas) < 1e-9, (n, objetivo)
+        assert abs(linha["hist_pauses_actual"] - reais) < 1e-9, (n, objetivo)
+    # pela probabilidade, N = 1: 0,9 (pausou) e 0,8 (pausou)
+    confere(1, "pauses", (0.9 + 0.8) / 2, (1 + 1) / 2)
+    # pela prioridade, N = 1: foto 85 pega a nota 0,5 (não pausou); foto 93 pega a nota 0,8 (pausou)
+    confere(1, "value", (0.5 + 0.8) / 2, (0 + 1) / 2)
+    # N = 2: 0,9 + 0,5 (1 pausa) e 0,8 + 0,2 (1 pausa); pela prioridade, 0,5 + 0,1 (1 pausa) e 0,8 + 0,2 (1 pausa)
+    confere(2, "pauses", (1.4 + 1.0) / 2, (1 + 1) / 2)
+    confere(2, "value", (0.6 + 1.0) / 2, (1 + 1) / 2)
+    for n in (1, 2):
+        for objetivo in ("pauses", "value"):
+            assert r[(n, objetivo, "baseline")]["hist_pauses_expected"] is None
+            assert r[(n, objetivo, "baseline")]["hist_pauses_actual"] is None
+
+
 def test_crm_no_teste_usa_o_faturamento_ate_a_foto_e_nao_o_de_hoje():
     # hoje o cliente 2 vale muito mais, mas na foto 85 quem valia mais era o 1: a ordem do teste não olha o futuro
     final = [(1, 0.5, 1.0, "Fiéis"), (2, 0.5, 1000.0, "Fiéis")]
@@ -772,12 +798,14 @@ def test_contrato_5_1_arquivos_novos_e_base_ausente(exportado, cfg):
     linhas = json.loads((pasta / "acionamento_crm.json").read_text(encoding="utf-8"))["linhas"]
     assert list(linhas[0]) == ["capacidade", "objetivo", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos",
                                "precisao_historica", "pausas_capturadas_historica", "valor_capturado_historico",
-                               "fracao_valor_capturado_historica"]
+                               "fracao_valor_capturado_historica", "pausas_esperadas_historicas", "pausas_reais_historicas"]
     assert len(linhas) == 24
     assert [(l["capacidade"], l["objetivo"], l["metodo"]) for l in linhas[:4]] == [
         (25, "pausas", "modelo"), (25, "pausas", "regra_simples"), (25, "valor", "modelo"), (25, "valor", "regra_simples")]
     assert list(linhas[0]["mix_segmentos"]) == cfg["gold"]["metricas"]["segmentos"]
     assert linhas[1]["mix_segmentos"] is None and linhas[1]["pausas_esperadas"] is None
+    assert linhas[0]["pausas_esperadas_historicas"] is not None and linhas[0]["pausas_reais_historicas"] is not None
+    assert linhas[1]["pausas_esperadas_historicas"] is None and linhas[1]["pausas_reais_historicas"] is None
 
 
 def test_contrato_5_1_recusa_outra_versao_e_arquivo_da_base(exportado, cfg, tmp_path):
@@ -800,11 +828,15 @@ def test_conferencia_dos_blocos_por_sql_proprio(exportado, cfg):
         checks = c.crm(crm)
         assert checks and all(x["ok"] for x in checks), [x for x in checks if not x["ok"]]
         # um valor estragado é acusado, em cada métrica dos objetivos
-        for coluna, estragado in (("precisao_historica", 1.0), ("valor_capturado_historico", 1e9), ("fracao_valor_capturado_historica", 1.0)):
+        for coluna, estragado in (("precisao_historica", 1.0), ("valor_capturado_historico", 1e9), ("fracao_valor_capturado_historica", 1.0),
+                                  ("pausas_esperadas_historicas", 1e9), ("pausas_reais_historicas", 1e9)):
             original = crm[2][coluna]
             crm[2][coluna] = estragado if original != estragado else 0.0
             assert not all(x["ok"] for x in c.crm(crm)), coluna
             crm[2][coluna] = original
+        # na regra simples, a calibração tem de ser nula: um valor ali também é acusado
+        crm[1]["pausas_reais_historicas"] = 1.0
+        assert not all(x["ok"] for x in c.crm(crm))
         for p in ("4s", "13s", "26s"):
             q = c.quadrante(p, export.expandir(json.loads((pasta / f"departamentos_quadrante_{p}.json").read_text(encoding="utf-8"))))
             assert q["iguais"] == q["proprio"] == q["exportado"] and q["soma_share_ok"], q

@@ -8,6 +8,8 @@ SELECT capacity AS capacidade,
        ROUND(hist_precision, 4) AS precisao_historica,
        ROUND(hist_pauses_caught_share, 4) AS pausas_capturadas_historica,
        ROUND(hist_value_caught, 2) AS valor_capturado_historico,
-       ROUND(hist_value_caught_share, 4) AS fracao_valor_capturado_historica
+       ROUND(hist_value_caught_share, 4) AS fracao_valor_capturado_historica,
+       ROUND(hist_pauses_expected, 4) AS pausas_esperadas_historicas,
+       ROUND(hist_pauses_actual, 4) AS pausas_reais_historicas
 FROM crm_capacity
 ORDER BY capacity, objective = 'value', method = 'baseline'

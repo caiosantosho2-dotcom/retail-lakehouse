@@ -263,7 +263,7 @@ class Caminho2:
 
     def crm(self, exportadas: list[dict]) -> list[dict]:
         """acionamento_crm exportado × SQL próprio, nos dois objetivos: as contas da semana e, por capacidade, a precisão,
-        o recall e o valor das pausas reais entre os N (US$ e fração)."""
+        o recall, o valor das pausas reais entre os N (US$ e fração) e a calibração no teste (só no modelo, G49)."""
         idx = {(l["capacidade"], l["objetivo"], l["metodo"]): l for l in exportadas}
         capacidades = self.cfg["gold"]["crm"]["capacidades"]
         semana = self.con.execute(f"""
@@ -298,7 +298,7 @@ class Caminho2:
                     {"nome": f"mix_segmentos {objetivo} N={n}", "proprio": sorted(mix.items()), "exportado": sorted(achado.items()), "tol": None},
                 ]
             for (objetivo, metodo), ordem in ordens_teste.items():
-                precisoes, recalls, valores, fracoes = [], [], [], []
+                precisoes, recalls, valores, fracoes, esperadas, reais = [], [], [], [], [], []
                 for f in fotos:
                     da_foto = sorted((l for l in teste if l[0] == f), key=ordem)
                     acertos = sum(l[1] for l in da_foto[:n])
@@ -307,17 +307,27 @@ class Caminho2:
                     recalls.append(acertos / sum(l[1] for l in da_foto))
                     valores.append(valor)
                     fracoes.append(valor / sum(l[5] for l in da_foto if l[1] == 1))
+                    esperadas.append(sum(l[3] for l in da_foto[:n]))
+                    reais.append(acertos)
                 linha = idx.get((n, objetivo, metodo), {})
+                modelo_ = metodo == "modelo"   # calibração (G49): só o modelo tem probabilidade; na regra simples é nulo
                 prefixo = f"{objetivo} {metodo} N={n}"
                 checks += [
                     {"nome": f"precisao {prefixo}", "proprio": round(sum(precisoes) / len(fotos), 4), "exportado": linha.get("precisao_historica"), "tol": 1e-4},
                     {"nome": f"recall {prefixo}", "proprio": round(sum(recalls) / len(fotos), 4), "exportado": linha.get("pausas_capturadas_historica"), "tol": 1e-4},
                     {"nome": f"valor {prefixo}", "proprio": round(sum(valores) / len(fotos), 2), "exportado": linha.get("valor_capturado_historico"), "tol": 0.01},
                     {"nome": f"fracao_valor {prefixo}", "proprio": round(sum(fracoes) / len(fotos), 4), "exportado": linha.get("fracao_valor_capturado_historica"), "tol": 1e-4},
+                    {"nome": f"pausas_esperadas_teste {prefixo}", "proprio": round(sum(esperadas) / len(fotos), 4) if modelo_ else None,
+                     "exportado": linha.get("pausas_esperadas_historicas"), "tol": 1e-4 if modelo_ else None},
+                    {"nome": f"pausas_reais_teste {prefixo}", "proprio": round(sum(reais) / len(fotos), 4) if modelo_ else None,
+                     "exportado": linha.get("pausas_reais_historicas"), "tol": 1e-4 if modelo_ else None},
                 ]
         for c in checks:
-            c["ok"] = c["exportado"] is not None and (
-                c["proprio"] == c["exportado"] if c["tol"] is None else abs(c["proprio"] - c["exportado"]) <= c["tol"] + 1e-9)
+            if c["proprio"] is None:   # nulo esperado: a linha tem de existir e o valor tem de ser nulo
+                c["ok"] = c["exportado"] is None
+            else:
+                c["ok"] = c["exportado"] is not None and (
+                    c["proprio"] == c["exportado"] if c["tol"] is None else abs(c["proprio"] - c["exportado"]) <= c["tol"] + 1e-9)
         return checks
 
     def quadrante(self, periodo: str, exportadas: list[dict]) -> dict:
@@ -504,7 +514,9 @@ def conferir(cfg: dict) -> int:
     for c in blocos["crm"]:
         if c["nome"] in ("precisao pausas modelo N=100", "precisao pausas regra_simples N=100",
                          "valor valor modelo N=100", "valor valor regra_simples N=100",
-                         "fracao_valor valor modelo N=100", "fracao_valor valor regra_simples N=100"):
+                         "fracao_valor valor modelo N=100", "fracao_valor valor regra_simples N=100",
+                         "pausas_esperadas_teste pausas modelo N=100", "pausas_reais_teste pausas modelo N=100",
+                         "pausas_esperadas_teste valor modelo N=100", "pausas_reais_teste valor modelo N=100"):
             print(f"  {c['nome']}: SQL próprio {c['proprio']}, exportado {c['exportado']}  {'✅' if c['ok'] else '❌'}")
     for objetivo, metrica in METRICA_DO_OBJETIVO.items():
         curva = [l for l in blocos["curva"] if l[0] == objetivo]

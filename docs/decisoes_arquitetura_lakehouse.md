@@ -21,7 +21,7 @@
   - [x] Comando único do pipeline, `python -m src.pipeline` (G42)
   - [x] Conferência contra o gabarito congelado do painel v3 (G44, 03/11/2026)
 - [ ] **Próximo passo: construir o painel v4** no repositório `retail-bi-dashboard`, como consumidor de `export/painel_v4/` (G43). Isso acontece numa sessão aberta lá; este projeto não altera aquele repositório.
-- [x] v4.1, Parte A: gold dos blocos de decisão, contrato 5.1 (G45–G48) → `docs/validacao/v4_1_gold.md`
+- [x] v4.1, Parte A: gold dos blocos de decisão, contrato 5.1 (G45–G49) → `docs/validacao/v4_1_gold.md`
 - [ ] v4.1, Parte B: blocos no painel, numa sessão aberta no `retail-bi-dashboard`, com os dois objetivos do bloco 1 (G48)
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
 - [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
@@ -773,3 +773,19 @@ retail-lakehouse/
     - **Nenhuma pausa real entre os N vale zero, não nulo**, e há teste para isso.
     - **Contrato:** continua 5.1, porque nenhum consumidor usa o 5.1 ainda. `acionamento_crm.json` foi de 12 para 24 linhas.
     - **A tabela da A1 e a lista de colunas da A3 da spec continuam na forma antiga.** Vale a revisão G48 logo abaixo delas e o contrato.
+- **G49. Calibração no teste, na gold: `hist_pauses_expected` e `hist_pauses_actual` em `crm_capacity` (decisão do Caio, 04/11/2026).**
+  - **Por quê:** no topo da lista, o modelo superestima as pausas, e o painel precisa avisar isso junto de "pausas esperadas". O número tinha vindo de uma consulta avulsa e ficaria fixo no texto do painel, sem acompanhar uma nova rodada do modelo, sem valer para outra capacidade ou objetivo e sem conferência. **Nenhum número fixo no painel:** a nota lê estas colunas.
+  - **Definições, por capacidade e objetivo, na mesma ordem de cada objetivo:** `hist_pauses_expected` = soma das probabilidades do modelo dos N primeiros no teste; `hist_pauses_actual` = pausas reais entre esses N; as duas na média das fotos 85 e 93. **Só `method = model`:** nulas na `baseline`, porque a regra simples não tem probabilidade.
+  - **No JSON:** `pausas_esperadas_historicas` e `pausas_reais_historicas`. O contrato continua 5.1, porque nenhum consumidor usa esse contrato ainda.
+  - **O que foi medido (média das fotos 85 e 93):**
+
+    | N | `pauses`: esperadas | `pauses`: reais | `value`: esperadas | `value`: reais |
+    |---:|---:|---:|---:|---:|
+    | 25 | 13,40 | 10,5 | 4,98 | 3,5 |
+    | 50 | 23,96 | 18,5 | 9,53 | 8,5 |
+    | 100 | 40,83 | 32,0 | 17,68 | 13,0 |
+    | 150 | 54,21 | 44,0 | 24,97 | 23,0 |
+    | 200 | 64,85 | 59,0 | 30,38 | 28,5 |
+    | 300 | 81,35 | 80,5 | 41,11 | 41,5 |
+
+  - **Leitura:** a diferença é maior nas listas curtas e quase some em N = 300, onde, no objetivo `value`, as reais passam levemente das esperadas. São duas fotos, então isso descreve o teste, não é uma correção a aplicar: as pausas esperadas de "esta semana" continuam sendo a soma das probabilidades, sem ajuste.

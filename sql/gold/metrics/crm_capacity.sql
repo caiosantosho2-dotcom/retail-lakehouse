@@ -8,6 +8,7 @@
 -- No teste (fotos 85 e 93, média das duas), pela mesma ordem: precision@N, recall@N e o valor das pausas reais entre os N,
 -- em US$ e como fração do valor de todas as pausas reais da foto. Probabilidade do teste e faturamento de 26 s ATÉ a foto
 -- (churn_features, G21), sem nada posterior à foto.
+-- Calibração no teste (G49, só model): soma das probabilidades dos N primeiros e pausas reais entre eles, média das fotos.
 -- Se a população for menor que N, acionam-se todos: "N primeiros" = quem existe.
 WITH objectives AS (
     SELECT unnest(['pauses', 'value']) AS objective
@@ -55,16 +56,16 @@ test_base AS (
 ),
 -- ranking = a ordem usada: as duas do modelo e a da regra simples.
 test_rank AS (
-    SELECT 'pauses' AS ranking, snapshot_week, label, revenue_26s,
+    SELECT 'pauses' AS ranking, snapshot_week, label, revenue_26s, model_score,
            row_number() OVER (PARTITION BY snapshot_week ORDER BY model_score DESC, household_key) AS position
     FROM test_base
     UNION ALL
-    SELECT 'value', snapshot_week, label, revenue_26s,
+    SELECT 'value', snapshot_week, label, revenue_26s, model_score,
            row_number() OVER (PARTITION BY snapshot_week
                               ORDER BY priority_score(model_score, revenue_26s) DESC, household_key)
     FROM test_base
     UNION ALL
-    SELECT 'baseline', snapshot_week, label, revenue_26s,
+    SELECT 'baseline', snapshot_week, label, revenue_26s, model_score,
            row_number() OVER (PARTITION BY snapshot_week
                               ORDER BY baseline_score DESC, revenue_26s DESC, household_key)
     FROM test_base
@@ -76,21 +77,26 @@ by_snapshot AS (
            -- Nenhuma pausa real entre os N vale zero, não nulo.
            coalesce(sum(r.revenue_26s) FILTER (WHERE r.label = 1 AND r.position <= c.capacity), 0) AS hist_value_caught,
            share(coalesce(sum(r.revenue_26s) FILTER (WHERE r.label = 1 AND r.position <= c.capacity), 0),
-                 sum(r.revenue_26s) FILTER (WHERE r.label = 1)) AS hist_value_caught_share
+                 sum(r.revenue_26s) FILTER (WHERE r.label = 1)) AS hist_value_caught_share,
+           sum(r.model_score) FILTER (WHERE r.position <= c.capacity) AS hist_pauses_expected,
+           sum(r.label) FILTER (WHERE r.position <= c.capacity) AS hist_pauses_actual
     FROM config_crm_capacity c CROSS JOIN test_rank r
     GROUP BY ALL
 ),
 history AS (
     SELECT capacity, ranking,
            avg(hist_precision) AS hist_precision, avg(hist_pauses_caught_share) AS hist_pauses_caught_share,
-           avg(hist_value_caught) AS hist_value_caught, avg(hist_value_caught_share) AS hist_value_caught_share
+           avg(hist_value_caught) AS hist_value_caught, avg(hist_value_caught_share) AS hist_value_caught_share,
+           avg(hist_pauses_expected) AS hist_pauses_expected, avg(hist_pauses_actual) AS hist_pauses_actual
     FROM by_snapshot GROUP BY ALL
 )
 SELECT h.capacity, o.objective, m.method,
        CASE WHEN m.method = 'model' THEN w.pauses_expected END AS pauses_expected,
        CASE WHEN m.method = 'model' THEN w.revenue_26s_at_stake END AS revenue_26s_at_stake,
        CASE WHEN m.method = 'model' THEN x.segment_mix END AS segment_mix,
-       h.hist_precision, h.hist_pauses_caught_share, h.hist_value_caught, h.hist_value_caught_share
+       h.hist_precision, h.hist_pauses_caught_share, h.hist_value_caught, h.hist_value_caught_share,
+       CASE WHEN m.method = 'model' THEN h.hist_pauses_expected END AS hist_pauses_expected,
+       CASE WHEN m.method = 'model' THEN h.hist_pauses_actual END AS hist_pauses_actual
 FROM objectives o
 CROSS JOIN (VALUES ('model'), ('baseline')) AS m(method)
 JOIN history h ON h.ranking = CASE WHEN m.method = 'model' THEN o.objective ELSE 'baseline' END

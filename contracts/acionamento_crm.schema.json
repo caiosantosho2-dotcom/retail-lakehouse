@@ -12,7 +12,7 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["capacidade", "objetivo", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos", "precisao_historica", "pausas_capturadas_historica", "valor_capturado_historico", "fracao_valor_capturado_historica"],
+        "required": ["capacidade", "objetivo", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos", "precisao_historica", "pausas_capturadas_historica", "valor_capturado_historico", "fracao_valor_capturado_historica", "pausas_esperadas_historicas", "pausas_reais_historicas"],
         "properties": {
           "capacidade": {"type": "integer", "minimum": 1},
           "objetivo": {"enum": ["pausas", "valor"], "description": "pausas = ordem pela probabilidade; valor = ordem pela priority_score (G48)"},
@@ -28,7 +28,9 @@
           "precisao_historica": {"type": "number", "minimum": 0, "maximum": 1},
           "pausas_capturadas_historica": {"type": "number", "minimum": 0, "maximum": 1},
           "valor_capturado_historico": {"type": "number", "minimum": 0, "description": "US$: faturamento de 26 s, até a foto, dos clientes entre os N que pausaram de fato; média das fotos 85 e 93"},
-          "fracao_valor_capturado_historica": {"type": "number", "minimum": 0, "maximum": 1, "description": "fração do valor de todas as pausas reais da foto; média das fotos 85 e 93"}
+          "fracao_valor_capturado_historica": {"type": "number", "minimum": 0, "maximum": 1, "description": "fração do valor de todas as pausas reais da foto; média das fotos 85 e 93"},
+          "pausas_esperadas_historicas": {"type": ["number", "null"], "minimum": 0, "description": "no teste, só no método modelo: soma das probabilidades dos N primeiros; média das fotos 85 e 93 (G49)"},
+          "pausas_reais_historicas": {"type": ["number", "null"], "minimum": 0, "description": "no teste, só no método modelo: pausas reais entre os N primeiros; média das fotos 85 e 93 (G49)"}
         }
       }
     }
