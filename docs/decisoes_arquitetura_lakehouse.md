@@ -21,8 +21,8 @@
   - [x] Comando único do pipeline, `python -m src.pipeline` (G42)
   - [x] Conferência contra o gabarito congelado do painel v3 (G44, 03/11/2026)
 - [ ] **Próximo passo: construir o painel v4** no repositório `retail-bi-dashboard`, como consumidor de `export/painel_v4/` (G43). Isso acontece numa sessão aberta lá; este projeto não altera aquele repositório.
-- [x] v4.1, Parte A: gold dos blocos de decisão, contrato 5.1 (G45–G47) → `docs/validacao/v4_1_gold.md`
-- [ ] v4.1, Parte B: blocos no painel, numa sessão aberta no `retail-bi-dashboard`. Antes, decidir o texto da comparação com a regra simples (G45)
+- [x] v4.1, Parte A: gold dos blocos de decisão, contrato 5.1 (G45–G48) → `docs/validacao/v4_1_gold.md`
+- [ ] v4.1, Parte B: blocos no painel, numa sessão aberta no `retail-bi-dashboard`, com os dois objetivos do bloco 1 (G48)
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
 - [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
 
@@ -727,21 +727,21 @@ retail-lakehouse/
   - **Resultado, `python -m src.pipeline` nos dados reais:** código 0 em 205 s (bronze 14 s, silver 31 s, gold build 120 s, export 26 s, reconcile 14 s). A conferência é a mesma de antes: 42 de 43 arquivos idênticos, 54.130 de 54.131 linhas, 0 diferenças sem explicação (só a G35) e 20 de 20 gabaritos. Testes: 121 passam.
 
 ### Blocos de decisão da Visão Geral, v4.1 (04/11/2026)
-> Spec: `docs/spec_v4_1_blocos_decisao.md`, Parte A. Validação: `docs/validacao/v4_1_gold.md`. G45 e G46 vêm da spec; G47 reúne as decisões pequenas tomadas na construção, a revisar pelo Caio.
+> Spec: `docs/spec_v4_1_blocos_decisao.md`, Parte A. Validação: `docs/validacao/v4_1_gold.md`. G45 e G46 vêm da spec; G47 reúne as decisões pequenas da construção, aprovadas pelo Caio; G48 é a revisão do bloco 1, decidida por ele depois da Parte A.
 
-- **G45. Bloco 1, "Quem acionar": `gold/metrics/crm_capacity`.**
+- **G45. Bloco 1, "Quem acionar": `gold/metrics/crm_capacity`.** *(Revisada pela G48: a ordem abaixo passou a ser a do objetivo `value`, e o grão ganhou o objetivo.)*
   - **Decisão que apoia:** se o CRM só consegue acionar N clientes, quem priorizar e o que isso protege.
   - **Ordem:** `priority_score = probabilidade × faturamento de 26 s`, decrescente; empate pelo `household_key`. A regra simples (`baseline`) é mais semanas sem comprar; empate pelo faturamento de 26 s e depois pelo `household_key`.
   - **⚠️ `priority_score` NÃO é o "dinheiro em risco" da G4.** Aquela métrica continua única: faturamento de 26 s de quem tem probabilidade ≥ 0,17, sem ponderar (`department_risk`). A `priority_score` serve só para ordenar e não é exportada. A conta é a mesma da fórmula descartada na G4 (`faturamento_em_risco` da lista de ação do painel), mas aqui ela não é apresentada como valor em dólar. `revenue_26s_at_stake` é a soma simples do faturamento dos N primeiros, sem ponderar.
   - **Sem vazamento:** no teste (fotos 85 e 93), o faturamento é o de 26 s até a foto, de `churn_features` (`log_value_26w` volta ao valor original com `exp(x) − 1`, G21). O modelo não muda.
-  - **Resultado que contraria a expectativa da spec (registrado sem forçar):** a `hist_precision` de `model` fica **abaixo** da de `baseline` em **6 de 6** capacidades (N = 100: 13,0% × 28,0%). **Por quê:** quem tende a pausar gasta pouco (correlação de −0,75 entre probabilidade e log do faturamento; mediana de US$ 160 entre quem pausou e US$ 703 entre quem não pausou). Multiplicar pelo faturamento leva a lista para clientes valiosos com risco menor: a ordem troca acerto por valor. **O modelo não é o problema:** ordenando só pela probabilidade, a precisão (N = 100: 32,0%) fica acima da regra simples em 6 de 6. Pelo valor das pausas capturadas, a `priority_score` ganha da regra simples em 5 de 6, com margem pequena (N = 100 é a exceção: US$ 5.988 × US$ 6.600). **Pendente para o Caio, antes da Parte B:** o texto da B2 ("Dos 100 primeiros, X% pausaram de fato, contra Y% pela regra simples") mostraria 13% × 28%.
+  - **Resultado que contraria a expectativa da spec (registrado sem forçar):** a `hist_precision` de `model` fica **abaixo** da de `baseline` em **6 de 6** capacidades (N = 100: 13,0% × 28,0%). **Por quê:** quem tende a pausar gasta pouco (correlação de −0,75 entre probabilidade e log do faturamento; mediana de US$ 160 entre quem pausou e US$ 703 entre quem não pausou). Multiplicar pelo faturamento leva a lista para clientes valiosos com risco menor: a ordem troca acerto por valor. **O modelo não é o problema:** ordenando só pela probabilidade, a precisão (N = 100: 32,0%) fica acima da regra simples em 6 de 6. Pelo valor das pausas capturadas, a `priority_score` ganha da regra simples em 5 de 6, com margem pequena (N = 100 é a exceção: US$ 5.988 × US$ 6.600). **Resolvido na G48.**
 - **G46. Bloco 2, "Onde agir no mix": `gold/metrics/department_quadrant`.**
   - **Decisão que apoia:** quais departamentos atacar primeiro, com atenção limitada a 3 em destaque.
   - **Cortes:** participação = mediana dos departamentos válidos do recorte; crescimento = o **crescimento total do recorte**, não zero, porque a pergunta é "quem puxa para baixo em relação ao negócio", não "quem caiu". Igual ao corte conta como "acima".
   - **Quadrantes:** `invest` (abaixo, acima), `keep` (acima, acima), `defend` (acima, abaixo), `review` (abaixo, abaixo), na ordem participação, crescimento.
   - **`gap_value`** = faturamento do ano anterior × (crescimento − corte). **`highlight_rank`** = os 3 de `defend` com o gap mais negativo.
   - **A base inteira fica fora** (sem crescimento comparável, G2c): não há linha na tabela nem arquivo `departamentos_quadrante_base.json`.
-- **G47. Decisões pequenas da construção (Claude, a revisar):**
+- **G47. Decisões pequenas da construção (Claude; aprovadas pelo Caio em 04/11/2026):**
   - **Amostra pequena = qualquer uma das duas definições.** A spec cita as duas tabelas de origem, cada uma com um critério: menos de 0,1% do faturamento do período (`department_profile`) ou menos de 30 compradores no subconjunto (`department_segment`). Só com a segunda, entrariam 19 departamentos em 26 s, e não 14, entre eles CHEF SHOPPE com +2.749% e o corte de participação cairia. Critério mais conservador; a conta de `share` = 1 continua fechando com os que ficam fora.
   - **Crescimento nulo fica fora**, porque não dá para pôr no gráfico. Hoje são 0 linhas entre os válidos.
   - **`department_segment` ganhou a coluna `revenue_prior_year`.** Ela já era somada na consulta, mas não era gravada, e o `gap_value` precisa dela. Acrescenta sem recalcular; a exportação escolhe as colunas pelo nome e os 47 arquivos anteriores continuam idênticos byte a byte.
@@ -751,3 +751,25 @@ retail-lakehouse/
   - **Capacidade maior que a população:** aciona quem existe. Não acontece nos dados reais (população de 2.203).
   - **Recortes pequenos ficam como estão:** "Em pausa" em 4 s não tem nenhum departamento válido (0 linhas), e em 13 s tem 1. Alguns recortes têm menos de 3 destaques, porque têm menos de 3 departamentos em `defend`. A Parte B precisa tratar esses casos.
   - **Tolerâncias do caminho 2 dos blocos:** só no último dígito arredondado (0,0001 nas frações, US$ 0,01 no dinheiro), porque ele soma de outra forma (faturamento da silver em `DOUBLE`, não pela volta do log). Quadrante, destaque, mix e conjunto de linhas exigem igualdade.
+- **G48. Bloco 1 com dois objetivos, cada um comparado com a regra simples na métrica dele (decisão do Caio, 04/11/2026; revisa a G45).**
+  - **Por quê:** a Parte A mostrou que uma ordem só não responde às duas perguntas. Quem tende a pausar gasta pouco: a correlação entre a probabilidade e o log do faturamento de 26 s é de **−0,75**, com mediana de US$ 160 entre quem pausou e US$ 703 entre quem não pausou. Com `probability × revenue_26s`, a lista vai para clientes valiosos de risco menor e perde da regra simples em precisão em 6 de 6 capacidades (N = 100: 13% × 28%). Ordenada só pela probabilidade, ganha em 6 de 6 (32% × 28%), mas fica com pouco valor. O modelo não muda; muda a pergunta que a ordem responde.
+  - **Objetivos:** `pauses` ordena pela `probability` e tem `hist_precision` como métrica principal. `value` ordena pela `priority_score` e tem `hist_value_caught` e `hist_value_caught_share` como métricas principais. Empate pelo `household_key`. `method` é `model` ou `baseline` dentro de cada objetivo; a regra simples é a mesma nos dois.
+  - **Definições:** `hist_value_caught` = faturamento de 26 s, até a foto, dos clientes entre os N que pausaram de fato, na média das fotos 85 e 93. `hist_value_caught_share` = esse valor ÷ o valor de todas as pausas reais da foto, na média das fotos. "Esta semana" sai por objetivo, só em `model`.
+  - **O que foi medido (média das fotos 85 e 93; faturamento em US$):**
+
+    | N | Precisão: objetivo `pauses` (`model`) | Precisão: objetivo `value` (`model`) | Precisão: regra simples | Valor capturado: objetivo `value` (`model`) | Valor capturado: objetivo `pauses` (`model`) | Valor capturado: regra simples |
+    |---:|---:|---:|---:|---:|---:|---:|
+    | 25 | 42,00% | 14,00% | 32,00% | 1.728 | 303 | 1.024 |
+    | 50 | 37,00% | 17,00% | 31,00% | 3.783 | 845 | 3.410 |
+    | 100 | 32,00% | 13,00% | 28,00% | 5.988 | 1.791 | 6.600 |
+    | 150 | 29,33% | 15,33% | 25,00% | 9.612 | 3.321 | 8.407 |
+    | 200 | 29,50% | 14,25% | 23,00% | 11.966 | 6.744 | 11.903 |
+    | 300 | 26,83% | 13,83% | 19,67% | 15.874 | 10.517 | 15.025 |
+
+  - **Resultado na métrica de cada objetivo:** `pauses`: modelo acima da regra simples em **6 de 6**. `value`: modelo acima em **5 de 6**, com pouca margem (N = 200: US$ 63), e abaixo em N = 100 (US$ 5.988 × US$ 6.600). Conforme a spec, essa derrota aparece no painel, sem esconder.
+  - **Decisões pequenas (Claude):**
+    - **As 4 métricas históricas saem em todas as linhas**, não só a principal do objetivo. A spec define a principal; com as demais, o painel consegue mostrar a troca entre acerto e valor sem outra conta.
+    - **Nomes no JSON:** `objetivo` = `pausas` ou `valor`; `valor_capturado_historico`; `fracao_valor_capturado_historica`. A revisão da spec só dava os nomes da gold.
+    - **Nenhuma pausa real entre os N vale zero, não nulo**, e há teste para isso.
+    - **Contrato:** continua 5.1, porque nenhum consumidor usa o 5.1 ainda. `acionamento_crm.json` foi de 12 para 24 linhas.
+    - **A tabela da A1 e a lista de colunas da A3 da spec continuam na forma antiga.** Vale a revisão G48 logo abaixo delas e o contrato.

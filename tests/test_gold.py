@@ -572,75 +572,120 @@ def _crm(final: list[tuple], teste: list[tuple], capacidades: list[int], segment
                                            "role": [l[2] for l in features], "log_value_26w": [l[3] for l in features]}))
     cur = c.execute(build._sql_metrica("crm_capacity"))
     colunas = [d[0] for d in cur.description]
-    return {(l[0], l[1]): dict(zip(colunas, l)) for l in cur.fetchall()}
+    return {(l[0], l[1], l[2]): dict(zip(colunas, l)) for l in cur.fetchall()}
 
 
-def test_crm_ordena_pela_prioridade_e_o_empate_vai_para_o_menor_cliente():
+def test_crm_objetivo_valor_ordena_pela_prioridade_e_o_empate_vai_para_o_menor_cliente():
     # prioridades: cliente 1 = 0,5 × 100 = 50; 2 e 3 = 0,3 × 300 = 90 (empate exato); 4 = 0,1 × 100 = 10
     final = [(3, 0.3, 300.0, "Regulares"), (1, 0.5, 100.0, "Fiéis"), (2, 0.3, 300.0, "Fiéis"), (4, 0.1, 100.0, "Regulares")]
     teste = [(1, 85, 1, 0.5, 1, 100.0), (2, 85, 0, 0.5, 1, 100.0)]
     r = _crm(final, teste, [1, 2, 3])
     # N = 1: o empate vai para o cliente 2 (menor household_key), e não para o 3 nem para o 1 (maior probabilidade)
-    assert abs(r[(1, "model")]["pauses_expected"] - 0.3) < 1e-9
-    assert abs(r[(1, "model")]["revenue_26s_at_stake"] - 300) < 1e-6
-    assert [(m["segment"], m["customers"]) for m in r[(1, "model")]["segment_mix"]] == [("Fiéis", 1), ("Regulares", 0)]
-    assert [(m["segment"], m["customers"]) for m in r[(2, "model")]["segment_mix"]] == [("Fiéis", 1), ("Regulares", 1)]
-    assert abs(r[(3, "model")]["pauses_expected"] - 1.1) < 1e-9                  # o cliente 1 entra depois dos dois
+    assert abs(r[(1, "value", "model")]["pauses_expected"] - 0.3) < 1e-9
+    assert abs(r[(1, "value", "model")]["revenue_26s_at_stake"] - 300) < 1e-6
+    assert [(m["segment"], m["customers"]) for m in r[(1, "value", "model")]["segment_mix"]] == [("Fiéis", 1), ("Regulares", 0)]
+    assert [(m["segment"], m["customers"]) for m in r[(2, "value", "model")]["segment_mix"]] == [("Fiéis", 1), ("Regulares", 1)]
+    assert abs(r[(3, "value", "model")]["pauses_expected"] - 1.1) < 1e-9           # o cliente 1 entra depois dos dois
 
 
-def test_crm_regra_simples_desempata_pelo_faturamento_e_nao_tem_numeros_da_semana():
+def test_crm_objetivo_pausas_ordena_pela_probabilidade_e_o_empate_vai_para_o_menor_cliente():
+    final = [(3, 0.3, 300.0, "Regulares"), (1, 0.5, 100.0, "Fiéis"), (2, 0.3, 300.0, "Fiéis"), (4, 0.1, 100.0, "Regulares")]
+    teste = [(1, 85, 1, 0.5, 1, 100.0), (2, 85, 0, 0.5, 1, 100.0)]
+    r = _crm(final, teste, [1, 2])
+    # N = 1: o cliente 1, de maior probabilidade, mesmo com a menor prioridade entre os três primeiros
+    assert abs(r[(1, "pauses", "model")]["pauses_expected"] - 0.5) < 1e-9
+    assert abs(r[(1, "pauses", "model")]["revenue_26s_at_stake"] - 100) < 1e-6
+    # N = 2: o empate de 0,3 vai para o cliente 2, de Fiéis, e não para o 3, de Regulares
+    assert [(m["segment"], m["customers"]) for m in r[(2, "pauses", "model")]["segment_mix"]] == [("Fiéis", 2), ("Regulares", 0)]
+
+
+def test_crm_regra_simples_desempata_pelo_faturamento_e_e_igual_nos_dois_objetivos():
     final = [(1, 0.5, 100.0, "Fiéis")]
     # foto 85: todos com 3 semanas sem comprar, exceto o 4 (5 semanas). Ordem da regra: 4; depois 2 e 3 (mais faturamento); 1.
     teste = [(1, 85, 1, 0.9, 3, 10.0), (2, 85, 0, 0.1, 3, 50.0), (3, 85, 1, 0.1, 3, 50.0), (4, 85, 1, 0.1, 5, 1.0)]
     r = _crm(final, teste, [1, 2, 3])
-    assert r[(1, "baseline")]["hist_precision"] == 1.0                # 4 pausou
-    assert r[(2, "baseline")]["hist_precision"] == 0.5                # 4 pausou, 2 não (2 vem antes do 3 no empate)
-    assert abs(r[(3, "baseline")]["hist_precision"] - 2 / 3) < 1e-12
-    assert r[(1, "baseline")]["pauses_expected"] is None
-    assert r[(1, "baseline")]["revenue_26s_at_stake"] is None
-    assert r[(1, "baseline")]["segment_mix"] is None
+    for objetivo in ("pauses", "value"):
+        assert r[(1, objetivo, "baseline")]["hist_precision"] == 1.0              # 4 pausou
+        assert r[(2, objetivo, "baseline")]["hist_precision"] == 0.5              # 4 pausou, 2 não (2 vem antes do 3 no empate)
+        assert abs(r[(3, objetivo, "baseline")]["hist_precision"] - 2 / 3) < 1e-12
+        assert r[(1, objetivo, "baseline")]["pauses_expected"] is None
+        assert r[(1, objetivo, "baseline")]["revenue_26s_at_stake"] is None
+        assert r[(1, objetivo, "baseline")]["segment_mix"] is None
+    for n in (1, 2, 3):
+        a, b = r[(n, "pauses", "baseline")], r[(n, "value", "baseline")]
+        assert {k: v for k, v in a.items() if k != "objective"} == {k: v for k, v in b.items() if k != "objective"}
 
 
 def test_crm_precisao_e_recall_a_mao_media_das_duas_fotos():
     final = [(1, 0.5, 100.0, "Fiéis")]
     teste = [
-        # foto 85: prioridades 90 (cliente 1, pausou), 40 (2, não), 10 (3, pausou). 2 pausas reais.
+        # foto 85: notas 0,9 (cliente 1, pausou), 0,4 (2, não), 0,1 (3, pausou). 2 pausas reais.
         (1, 85, 1, 0.9, 1, 100.0), (2, 85, 0, 0.4, 2, 100.0), (3, 85, 1, 0.1, 3, 100.0),
-        # foto 93: prioridades 80 (1, não), 50 (2, pausou), 20 (3, não). 1 pausa real.
+        # foto 93: notas 0,8 (1, não), 0,5 (2, pausou), 0,2 (3, não). 1 pausa real.
         (1, 93, 0, 0.8, 3, 100.0), (2, 93, 1, 0.5, 1, 100.0), (3, 93, 0, 0.2, 2, 100.0),
     ]
     r = _crm(final, teste, [1, 2])
-    # N = 1: foto 85 acerta 1 de 1 (precisão 1, recall 1/2); foto 93 acerta 0 de 1 (0 e 0)
-    assert abs(r[(1, "model")]["hist_precision"] - (1 + 0) / 2) < 1e-12
-    assert abs(r[(1, "model")]["hist_pauses_caught_share"] - (1 / 2 + 0) / 2) < 1e-12
-    # N = 2: foto 85 acerta 1 de 2 (1/2 e 1/2); foto 93 acerta 1 de 2 (1/2 e 1)
-    assert abs(r[(2, "model")]["hist_precision"] - 0.5) < 1e-12
-    assert abs(r[(2, "model")]["hist_pauses_caught_share"] - (1 / 2 + 1) / 2) < 1e-12
+    # O faturamento é igual para todos, então as duas ordens do modelo coincidem.
+    for objetivo in ("pauses", "value"):
+        # N = 1: foto 85 acerta 1 de 1 (precisão 1, recall 1/2); foto 93 acerta 0 de 1 (0 e 0)
+        assert abs(r[(1, objetivo, "model")]["hist_precision"] - (1 + 0) / 2) < 1e-12
+        assert abs(r[(1, objetivo, "model")]["hist_pauses_caught_share"] - (1 / 2 + 0) / 2) < 1e-12
+        # N = 2: foto 85 acerta 1 de 2 (1/2 e 1/2); foto 93 acerta 1 de 2 (1/2 e 1)
+        assert abs(r[(2, objetivo, "model")]["hist_precision"] - 0.5) < 1e-12
+        assert abs(r[(2, objetivo, "model")]["hist_pauses_caught_share"] - (1 / 2 + 1) / 2) < 1e-12
+
+
+def test_crm_valor_capturado_a_mao_nos_dois_objetivos_e_zero_quando_nao_acerta():
+    final = [(1, 0.5, 100.0, "Fiéis")]
+    teste = [
+        # foto 85: pausaram o 1 (US$ 10) e o 3 (US$ 300); valor real de US$ 310. Prioridades: 9, 50 e 30.
+        (1, 85, 1, 0.9, 1, 10.0), (2, 85, 0, 0.5, 2, 100.0), (3, 85, 1, 0.1, 3, 300.0),
+        # foto 93: pausou o 1 (US$ 100). Prioridades: 90 e 10.
+        (1, 93, 1, 0.9, 1, 100.0), (2, 93, 0, 0.1, 2, 100.0),
+    ]
+    r = _crm(final, teste, [1, 2])
+    def confere(n, objetivo, metodo, valor, fracao):
+        linha = r[(n, objetivo, metodo)]
+        assert abs(linha["hist_value_caught"] - valor) < 1e-6, (n, objetivo, metodo)
+        assert abs(linha["hist_value_caught_share"] - fracao) < 1e-9, (n, objetivo, metodo)
+    # pela probabilidade, N = 1: o cliente 1 nas duas fotos
+    confere(1, "pauses", "model", (10 + 100) / 2, (10 / 310 + 1) / 2)
+    # pela prioridade, N = 1: foto 85 pega o 2, que não pausou (zero, não nulo); foto 93 pega o 1
+    confere(1, "value", "model", (0 + 100) / 2, (0 + 1) / 2)
+    # pela prioridade, N = 2: foto 85 pega o 2 e o 3; foto 93 pega os dois
+    confere(2, "value", "model", (300 + 100) / 2, (300 / 310 + 1) / 2)
+    # regra simples, N = 1: foto 85 pega o 3; foto 93 pega o 2, que não pausou. Igual nos dois objetivos.
+    for objetivo in ("pauses", "value"):
+        confere(1, objetivo, "baseline", (300 + 0) / 2, (300 / 310 + 0) / 2)
 
 
 def test_crm_no_teste_usa_o_faturamento_ate_a_foto_e_nao_o_de_hoje():
     # hoje o cliente 2 vale muito mais, mas na foto 85 quem valia mais era o 1: a ordem do teste não olha o futuro
     final = [(1, 0.5, 1.0, "Fiéis"), (2, 0.5, 1000.0, "Fiéis")]
     teste = [(1, 85, 1, 0.5, 1, 500.0), (2, 85, 0, 0.5, 1, 5.0)]
-    assert _crm(final, teste, [1])[(1, "model")]["hist_precision"] == 1.0
+    assert _crm(final, teste, [1])[(1, "value", "model")]["hist_precision"] == 1.0
 
 
 def test_crm_capacidade_maior_que_a_populacao_aciona_quem_existe():
     final = [(1, 0.2, 100.0, "Fiéis"), (2, 0.3, 100.0, "Fiéis")]
     teste = [(1, 85, 1, 0.5, 1, 100.0), (2, 85, 0, 0.1, 1, 100.0)]
     r = _crm(final, teste, [10])
-    assert abs(r[(10, "model")]["pauses_expected"] - 0.5) < 1e-9
-    assert r[(10, "model")]["hist_precision"] == 0.5 and r[(10, "model")]["hist_pauses_caught_share"] == 1.0
+    for objetivo in ("pauses", "value"):
+        linha = r[(10, objetivo, "model")]
+        assert abs(linha["pauses_expected"] - 0.5) < 1e-9
+        assert linha["hist_precision"] == 0.5 and linha["hist_pauses_caught_share"] == 1.0
+        assert abs(linha["hist_value_caught"] - 100) < 1e-6 and abs(linha["hist_value_caught_share"] - 1) < 1e-9
 
 
 def test_crm_na_gold_sintetica_grao_e_mix(cfg, con):
     registrar_delta(con, "crm_capacity", caminho_tabela(cfg, "gold", "metrics/crm_capacity"))
     capacidades = cfg["gold"]["crm"]["capacidades"]
     assert capacidades == [25, 50, 100, 150, 200, 300]
-    linhas = con.execute("SELECT capacity, method, segment_mix FROM crm_capacity").fetchall()
-    assert {(n, m) for n, m, _ in linhas} == {(n, m) for n in capacidades for m in ("model", "baseline")} and len(linhas) == 12
+    linhas = con.execute("SELECT capacity, objective, method, segment_mix FROM crm_capacity").fetchall()
+    assert {l[:3] for l in linhas} == {(n, o, m) for n in capacidades for o in ("pauses", "value") for m in ("model", "baseline")}
+    assert len(linhas) == 24
     populacao = um(con, "SELECT count(*) FROM churn_score")[0]
-    for n, metodo, mix in linhas:
+    for n, _, metodo, mix in linhas:
         if metodo == "model":
             assert sum(m["customers"] for m in mix) == min(n, populacao)
 
@@ -725,9 +770,12 @@ def test_contrato_5_1_arquivos_novos_e_base_ausente(exportado, cfg):
     assert "departamentos_quadrante_base.json" not in nomes
     assert "acionamento_crm" in {a.base for a in export.ARQUIVOS if a.carga == "abertura"}
     linhas = json.loads((pasta / "acionamento_crm.json").read_text(encoding="utf-8"))["linhas"]
-    assert list(linhas[0]) == ["capacidade", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos",
-                               "precisao_historica", "pausas_capturadas_historica"]
-    assert [(l["capacidade"], l["metodo"]) for l in linhas[:2]] == [(25, "modelo"), (25, "regra_simples")]
+    assert list(linhas[0]) == ["capacidade", "objetivo", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos",
+                               "precisao_historica", "pausas_capturadas_historica", "valor_capturado_historico",
+                               "fracao_valor_capturado_historica"]
+    assert len(linhas) == 24
+    assert [(l["capacidade"], l["objetivo"], l["metodo"]) for l in linhas[:4]] == [
+        (25, "pausas", "modelo"), (25, "pausas", "regra_simples"), (25, "valor", "modelo"), (25, "valor", "regra_simples")]
     assert list(linhas[0]["mix_segmentos"]) == cfg["gold"]["metricas"]["segmentos"]
     assert linhas[1]["mix_segmentos"] is None and linhas[1]["pausas_esperadas"] is None
 
@@ -751,9 +799,12 @@ def test_conferencia_dos_blocos_por_sql_proprio(exportado, cfg):
         crm = export.expandir(json.loads((pasta / "acionamento_crm.json").read_text(encoding="utf-8")))
         checks = c.crm(crm)
         assert checks and all(x["ok"] for x in checks), [x for x in checks if not x["ok"]]
-        # um valor estragado é acusado
-        crm[0]["precisao_historica"] = 0.0 if crm[0]["precisao_historica"] else 1.0
-        assert not all(x["ok"] for x in c.crm(crm))
+        # um valor estragado é acusado, em cada métrica dos objetivos
+        for coluna, estragado in (("precisao_historica", 1.0), ("valor_capturado_historico", 1e9), ("fracao_valor_capturado_historica", 1.0)):
+            original = crm[2][coluna]
+            crm[2][coluna] = estragado if original != estragado else 0.0
+            assert not all(x["ok"] for x in c.crm(crm)), coluna
+            crm[2][coluna] = original
         for p in ("4s", "13s", "26s"):
             q = c.quadrante(p, export.expandir(json.loads((pasta / f"departamentos_quadrante_{p}.json").read_text(encoding="utf-8"))))
             assert q["iguais"] == q["proprio"] == q["exportado"] and q["soma_share_ok"], q
@@ -764,4 +815,5 @@ def test_conferencia_dos_blocos_por_sql_proprio(exportado, cfg):
 def test_pausas_com_a_populacao_inteira_somam_todas_as_probabilidades(exportado, cfg, con):
     n, pausas = reconcile.pausas_populacao_inteira(cfg)
     total, quantos = um(con, "SELECT sum(probability), count(*) FROM churn_score")
-    assert n == quantos and abs(pausas - total) < 1e-9
+    assert n == quantos and set(pausas) == {"pauses", "value"}
+    assert all(abs(v - total) < 1e-9 for v in pausas.values())

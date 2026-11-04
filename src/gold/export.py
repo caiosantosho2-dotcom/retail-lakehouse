@@ -64,7 +64,7 @@ ARQUIVOS = [
             chave=("periodo", "grupo", "departamento")),
     Arquivo("kpis_filtrados", "1 linha por período × subconjunto de segmentos × departamento", "abertura",
             dimensoes=("periodo", "subconjunto", "departamento"), chave=("periodo", "subconjunto", "departamento")),
-    Arquivo("acionamento_crm", "1 linha por capacidade de contato × método de priorização", "abertura", chave=("capacidade", "metodo")),
+    Arquivo("acionamento_crm", "1 linha por capacidade de contato × objetivo × método de priorização", "abertura", chave=("capacidade", "objetivo", "metodo")),
     Arquivo("departamentos_quadrante", "1 linha por subconjunto de segmentos × departamento sem amostra pequena", "abertura", True,
             chave=("subconjunto", "departamento"), so_com_ano_anterior=True),
     Arquivo("departamentos_ficha", "1 linha por departamento com faturamento no período", "categoria", True,

@@ -11,10 +11,10 @@ Diferença só passa se estiver em `gold.conferencia.excecoes` (com o motivo reg
 
 Caminho 2, gabaritos fixos do config, recalculados por SQL próprio direto da silver (sem as macros e sem as views da
 gold; os períodos também são refeitos aqui) e comparados com o valor esperado e com o que a gold gravou.
-Blocos de decisão (contrato 5.1, G45 e G46): acionamento_crm e departamentos_quadrante não existem no publicado. São
-refeitos pelo caminho 2: o faturamento de 26 s até cada foto sai da silver (não das features), a ordenação e as contas
-são escritas aqui, e os quadrantes são remontados a partir da venda. As pausas esperadas com N = população inteira
-rodam o próprio SQL de crm_capacity e têm de dar o gabarito `pausas_esperadas`.
+Blocos de decisão (contrato 5.1, G45, G46 e G48): acionamento_crm e departamentos_quadrante não existem no publicado.
+São refeitos pelo caminho 2: o faturamento de 26 s até cada foto sai da silver (não das features), a ordenação e as
+contas são escritas aqui, nos dois objetivos, e os quadrantes são remontados a partir da venda. As pausas esperadas com
+N = população inteira rodam o próprio SQL de crm_capacity e têm de dar o gabarito `pausas_esperadas` nos dois objetivos.
 Termina com código 1 se houver diferença sem explicação ou gabarito que não bate.
 """
 from __future__ import annotations
@@ -262,47 +262,58 @@ class Caminho2:
     # ------------------------------------------------------------ blocos de decisão (G45, G46)
 
     def crm(self, exportadas: list[dict]) -> list[dict]:
-        """acionamento_crm exportado × SQL próprio: as contas da semana e a precisão e o recall por capacidade."""
-        idx = {(l["capacidade"], l["metodo"]): l for l in exportadas}
+        """acionamento_crm exportado × SQL próprio, nos dois objetivos: as contas da semana e, por capacidade, a precisão,
+        o recall e o valor das pausas reais entre os N (US$ e fração)."""
+        idx = {(l["capacidade"], l["objetivo"], l["metodo"]): l for l in exportadas}
         capacidades = self.cfg["gold"]["crm"]["capacidades"]
         semana = self.con.execute(f"""
             WITH r AS (SELECT household_key, sum(fat) AS rev FROM v
                        WHERE week_no BETWEEN {self.fim} - {self.cfg['gold']['janela']['semanas']} + 1 AND {self.fim} GROUP BY 1)
-            SELECT c.probability, r.rev, c.segment FROM churn_score c JOIN r USING (household_key)
-            ORDER BY c.probability * r.rev DESC, c.household_key""").fetchall()
+            SELECT c.probability, r.rev, c.segment, c.household_key FROM churn_score c JOIN r USING (household_key)""").fetchall()
         teste = self.con.execute(f"""
             WITH r AS (SELECT t.household_key, t.snapshot_week, sum(v.fat) AS rev
                        FROM churn_test_score t JOIN v ON v.household_key = t.household_key
                         AND v.week_no BETWEEN t.snapshot_week - {self.cfg['gold']['janela']['semanas']} + 1 AND t.snapshot_week
                        GROUP BY 1, 2)
-            SELECT t.snapshot_week, t.label, t.household_key, t.model_score * r.rev AS prioridade, t.baseline_score, r.rev
+            SELECT t.snapshot_week, t.label, t.household_key, t.model_score, t.baseline_score, r.rev
             FROM churn_test_score t JOIN r USING (household_key, snapshot_week)""").fetchall()
         fotos = sorted({l[0] for l in teste})
-        ordens = {"modelo": lambda l: (-l[3], l[2]), "regra_simples": lambda l: (-l[4], -l[5], l[2])}
+        ordens_semana = {"pausas": lambda l: (-l[0], l[3]), "valor": lambda l: (-(l[0] * l[1]), l[3])}
+        ordens_teste = {("pausas", "modelo"): lambda l: (-l[3], l[2]),
+                        ("valor", "modelo"): lambda l: (-(l[3] * l[5]), l[2]),
+                        ("pausas", "regra_simples"): lambda l: (-l[4], -l[5], l[2]),
+                        ("valor", "regra_simples"): lambda l: (-l[4], -l[5], l[2])}
         checks = []
         for n in capacidades:
-            topo = semana[:n]
-            modelo = idx.get((n, "modelo"), {})
-            mix: dict[str, int] = {}
-            for _, _, seg in topo:
-                mix[seg] = mix.get(seg, 0) + 1
-            achado = {k: v for k, v in (modelo.get("mix_segmentos") or {}).items() if v}
-            checks += [
-                {"nome": f"pausas_esperadas N={n}", "proprio": round(sum(l[0] for l in topo), 4), "exportado": modelo.get("pausas_esperadas"), "tol": 1e-4},
-                {"nome": f"faturamento_26s N={n}", "proprio": round(sum(l[1] for l in topo), 2), "exportado": modelo.get("faturamento_26s_em_jogo"), "tol": 0.01},
-                {"nome": f"mix_segmentos N={n}", "proprio": sorted(mix.items()), "exportado": sorted(achado.items()), "tol": None},
-            ]
-            for metodo, ordem in ordens.items():
-                precisoes, recalls = [], []
+            for objetivo, ordem in ordens_semana.items():
+                topo = sorted(semana, key=ordem)[:n]
+                modelo = idx.get((n, objetivo, "modelo"), {})
+                mix: dict[str, int] = {}
+                for l in topo:
+                    mix[l[2]] = mix.get(l[2], 0) + 1
+                achado = {k: v for k, v in (modelo.get("mix_segmentos") or {}).items() if v}
+                checks += [
+                    {"nome": f"pausas_esperadas {objetivo} N={n}", "proprio": round(sum(l[0] for l in topo), 4), "exportado": modelo.get("pausas_esperadas"), "tol": 1e-4},
+                    {"nome": f"faturamento_26s {objetivo} N={n}", "proprio": round(sum(l[1] for l in topo), 2), "exportado": modelo.get("faturamento_26s_em_jogo"), "tol": 0.01},
+                    {"nome": f"mix_segmentos {objetivo} N={n}", "proprio": sorted(mix.items()), "exportado": sorted(achado.items()), "tol": None},
+                ]
+            for (objetivo, metodo), ordem in ordens_teste.items():
+                precisoes, recalls, valores, fracoes = [], [], [], []
                 for f in fotos:
                     da_foto = sorted((l for l in teste if l[0] == f), key=ordem)
                     acertos = sum(l[1] for l in da_foto[:n])
+                    valor = sum(l[5] for l in da_foto[:n] if l[1] == 1)
                     precisoes.append(acertos / len(da_foto[:n]))
                     recalls.append(acertos / sum(l[1] for l in da_foto))
-                linha = idx.get((n, metodo), {})
+                    valores.append(valor)
+                    fracoes.append(valor / sum(l[5] for l in da_foto if l[1] == 1))
+                linha = idx.get((n, objetivo, metodo), {})
+                prefixo = f"{objetivo} {metodo} N={n}"
                 checks += [
-                    {"nome": f"precisao {metodo} N={n}", "proprio": round(sum(precisoes) / len(fotos), 4), "exportado": linha.get("precisao_historica"), "tol": 1e-4},
-                    {"nome": f"recall {metodo} N={n}", "proprio": round(sum(recalls) / len(fotos), 4), "exportado": linha.get("pausas_capturadas_historica"), "tol": 1e-4},
+                    {"nome": f"precisao {prefixo}", "proprio": round(sum(precisoes) / len(fotos), 4), "exportado": linha.get("precisao_historica"), "tol": 1e-4},
+                    {"nome": f"recall {prefixo}", "proprio": round(sum(recalls) / len(fotos), 4), "exportado": linha.get("pausas_capturadas_historica"), "tol": 1e-4},
+                    {"nome": f"valor {prefixo}", "proprio": round(sum(valores) / len(fotos), 2), "exportado": linha.get("valor_capturado_historico"), "tol": 0.01},
+                    {"nome": f"fracao_valor {prefixo}", "proprio": round(sum(fracoes) / len(fotos), 4), "exportado": linha.get("fracao_valor_capturado_historica"), "tol": 1e-4},
                 ]
         for c in checks:
             c["ok"] = c["exportado"] is not None and (
@@ -389,8 +400,9 @@ class Caminho2:
                 "primeira": primeira or (f"soma de share != 1 em {fora}" if fora else ""), "soma_share_ok": not fora}
 
 
-def pausas_populacao_inteira(cfg: dict) -> tuple[int, float]:
-    """O próprio SQL de crm_capacity com N = população inteira: a soma das probabilidades tem de dar o gabarito."""
+def pausas_populacao_inteira(cfg: dict) -> tuple[int, dict[str, float]]:
+    """O próprio SQL de crm_capacity com N = população inteira: a soma das probabilidades tem de dar o gabarito nos dois
+    objetivos, porque a ordem não muda quem entra quando todos entram."""
     con = conectar_duckdb(cfg)
     try:
         build.configurar_metricas(con, cfg)
@@ -400,16 +412,20 @@ def pausas_populacao_inteira(cfg: dict) -> tuple[int, float]:
         n = con.execute("SELECT count(*) FROM churn_score").fetchall()[0][0]
         con.unregister("config_crm_capacity")
         con.register("config_crm_capacity", pa.table({"capacity": pa.array([n], pa.int32())}))
-        sql = f"SELECT pauses_expected FROM ({build._sql_metrica('crm_capacity')}) WHERE method = 'model'"
-        return n, con.execute(sql).fetchall()[0][0]
+        sql = f"SELECT objective, pauses_expected FROM ({build._sql_metrica('crm_capacity')}) WHERE method = 'model'"
+        return n, dict(con.execute(sql).fetchall())
     finally:
         con.close()
 
 
+METRICA_DO_OBJETIVO = {"pausas": "precisao_historica", "valor": "valor_capturado_historico"}   # G48
+
+
 def curva_modelo_regra(exportadas: list[dict]) -> list[tuple]:
-    """(capacidade, precisão do modelo, precisão da regra simples): registra quem fica acima, sem forçar (spec A1)."""
-    idx = {(l["capacidade"], l["metodo"]): l["precisao_historica"] for l in exportadas}
-    return [(n, idx[(n, "modelo")], idx[(n, "regra_simples")]) for n in sorted({c for c, _ in idx})]
+    """(objetivo, capacidade, modelo, regra simples) na métrica do objetivo: registra quem fica acima, sem forçar (G48)."""
+    idx = {(l["objetivo"], l["capacidade"], l["metodo"]): l[METRICA_DO_OBJETIVO[l["objetivo"]]] for l in exportadas}
+    return [(o, n, idx[(o, n, "modelo")], idx[(o, n, "regra_simples")])
+            for o in METRICA_DO_OBJETIVO for n in sorted({c for _, c, _ in idx})]
 
 
 def caminho_2(cfg: dict) -> tuple[list[tuple], list[dict], dict]:
@@ -431,7 +447,7 @@ def caminho_2(cfg: dict) -> tuple[list[tuple], list[dict], dict]:
     gabarito = next(g for g in cfg["gold"]["conferencia"]["gabaritos"] if g["nome"] == "pausas_esperadas")
     blocos = {"crm": c.crm(crm), "curva": curva_modelo_regra(crm),
               "populacao": {"n": populacao, "pausas": pausas, "gabarito": gabarito["valor"],
-                            "ok": round(pausas, gabarito["casas"]) == gabarito["valor"]},
+                            "ok": len(pausas) == 2 and all(round(v, gabarito["casas"]) == gabarito["valor"] for v in pausas.values())},
               "quadrante": [c.quadrante(p, expandir(json.loads((cfg["paths"]["export"] / f"departamentos_quadrante_{p}.json").read_text(encoding="utf-8"))))
                             for p, (_, _, tem_ano) in c.periodos.items() if tem_ano]}
     c.con.close()
@@ -479,18 +495,23 @@ def conferir(cfg: dict) -> int:
 
     print("\nBloco 1, acionamento_crm × SQL próprio (faturamento de 26 s direto da silver):")
     pop = blocos["populacao"]
-    print(f"  pausas esperadas com N = população inteira ({pop['n']:,}): {pop['pausas']:.4f}; gabarito {pop['gabarito']}  {'✅' if pop['ok'] else '❌'}")
+    pausas_pop = "; ".join(f"{o} {v:.4f}" for o, v in sorted(pop["pausas"].items()))
+    print(f"  pausas esperadas com N = população inteira ({pop['n']:,}): {pausas_pop}; gabarito {pop['gabarito']}  {'✅' if pop['ok'] else '❌'}")
     errados = [c for c in blocos["crm"] if not c["ok"]]
     print(f"  conferências: {len(blocos['crm']) - len(errados)} de {len(blocos['crm'])} iguais")
     for c in errados:
         print(f"    ❌ {c['nome']}: SQL próprio {c['proprio']}, exportado {c['exportado']}")
     for c in blocos["crm"]:
-        if c["nome"].startswith(("precisao modelo N=100", "precisao regra_simples N=100")):
+        if c["nome"] in ("precisao pausas modelo N=100", "precisao pausas regra_simples N=100",
+                         "valor valor modelo N=100", "valor valor regra_simples N=100",
+                         "fracao_valor valor modelo N=100", "fracao_valor valor regra_simples N=100"):
             print(f"  {c['nome']}: SQL próprio {c['proprio']}, exportado {c['exportado']}  {'✅' if c['ok'] else '❌'}")
-    print("  precisão no teste por capacidade (modelo × regra simples; informativo, não reprova):")
-    for n, modelo, regra in blocos["curva"]:
-        print(f"    N={n:<4} {modelo:.4f} × {regra:.4f}  {'modelo acima' if modelo > regra else 'empate' if modelo == regra else 'regra acima'}")
-    print(f"  modelo acima em {sum(1 for _, a, b in blocos['curva'] if a > b)} de {len(blocos['curva'])} capacidades")
+    for objetivo, metrica in METRICA_DO_OBJETIVO.items():
+        curva = [l for l in blocos["curva"] if l[0] == objetivo]
+        print(f"  objetivo {objetivo}, {metrica} no teste (modelo × regra simples; informativo, não reprova):")
+        for _, n, modelo, regra in curva:
+            print(f"    N={n:<4} {modelo:,.4f} × {regra:,.4f}  {'modelo acima' if modelo > regra else 'empate' if modelo == regra else 'regra acima'}")
+        print(f"    modelo acima em {sum(1 for _, _, a, b in curva if a > b)} de {len(curva)} capacidades")
     print("\nBloco 2, departamentos_quadrante × montado a partir da venda:")
     for q in blocos["quadrante"]:
         ok = q["iguais"] == q["proprio"] == q["exportado"] == q["linhas_arquivo"] and q["soma_share_ok"]

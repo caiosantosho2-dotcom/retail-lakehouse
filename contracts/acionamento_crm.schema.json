@@ -12,10 +12,11 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["capacidade", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos", "precisao_historica", "pausas_capturadas_historica"],
+        "required": ["capacidade", "objetivo", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos", "precisao_historica", "pausas_capturadas_historica", "valor_capturado_historico", "fracao_valor_capturado_historica"],
         "properties": {
           "capacidade": {"type": "integer", "minimum": 1},
-          "metodo": {"enum": ["modelo", "regra_simples"]},
+          "objetivo": {"enum": ["pausas", "valor"], "description": "pausas = ordem pela probabilidade; valor = ordem pela priority_score (G48)"},
+          "metodo": {"enum": ["modelo", "regra_simples"], "description": "a regra simples é a mesma nos dois objetivos"},
           "pausas_esperadas": {"type": ["number", "null"], "minimum": 0, "description": "esta semana, só no método modelo"},
           "faturamento_26s_em_jogo": {"type": ["number", "null"], "minimum": 0, "description": "esta semana, só no método modelo; não é o dinheiro em risco da G4"},
           "mix_segmentos": {
@@ -25,7 +26,9 @@
             "additionalProperties": {"type": "integer", "minimum": 0}
           },
           "precisao_historica": {"type": "number", "minimum": 0, "maximum": 1},
-          "pausas_capturadas_historica": {"type": "number", "minimum": 0, "maximum": 1}
+          "pausas_capturadas_historica": {"type": "number", "minimum": 0, "maximum": 1},
+          "valor_capturado_historico": {"type": "number", "minimum": 0, "description": "US$: faturamento de 26 s, até a foto, dos clientes entre os N que pausaram de fato; média das fotos 85 e 93"},
+          "fracao_valor_capturado_historica": {"type": "number", "minimum": 0, "maximum": 1, "description": "fração do valor de todas as pausas reais da foto; média das fotos 85 e 93"}
         }
       }
     }

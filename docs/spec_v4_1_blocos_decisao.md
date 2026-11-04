@@ -60,6 +60,13 @@ Nada no modelo muda.
 - `pauses_expected` com N = população inteira = **135,95** (soma das probabilidades, já conferida);
 - a curva `hist_precision` de `model` fica **acima** da de `baseline` na maioria das capacidades. Se não ficar, registrar e explicar, sem forçar.
 
+> **Revisão de 04/11/2026 (G48, decisão do Caio depois da Parte A):** o resultado mostrou que ordenar só por `probability × revenue_26s` perde da regra simples em precisão (13% × 28% em N = 100). Quem tende a pausar gasta pouco (correlação −0,75), então essa ordem leva a lista para clientes valiosos de risco menor. Por isso o bloco passa a ter **dois objetivos**, cada um comparado com a regra simples **na métrica dele**:
+> - **`objective = pauses`**: ordem pela `probability`; métrica principal `hist_precision` (dos N, quantos pausaram);
+> - **`objective = value`**: ordem pela `priority_score`; métrica principal `hist_value_caught` (faturamento de 26 s, até a foto, dos clientes entre os N que pausaram de fato; média das fotos 85 e 93) e `hist_value_caught_share` (fração do valor total das pausas reais da foto).
+> - `method` passa a ser `model` ou `baseline` dentro de cada objetivo. A regra simples é a mesma nos dois.
+> - As colunas de "esta semana" (`pauses_expected`, `revenue_26s_at_stake`, `segment_mix`) saem por objetivo.
+> - Se o modelo perder da regra simples em algum objetivo e capacidade, isso **aparece no painel**, sem esconder.
+
 ### A2. Bloco 2: `gold/metrics/department_quadrant`
 **Fonte:** `department_profile` e `department_segment`, que já existem. Nada é recalculado.
 
@@ -111,10 +118,15 @@ Nada no modelo muda.
 ### B2. Bloco "Quem acionar" (Visão Geral)
 - **Título:** "Quem o CRM deve acionar". **Subtítulo:** "Com capacidade para N clientes, priorizando quem tem mais chance de pausar e mais valor".
 - **Seletor de capacidade:** 25, 50, 100, 150, 200 e 300, com 100 como padrão.
+- **Seletor de objetivo (G48):** "Evitar mais pausas" (padrão) ou "Proteger mais valor". Troca a ordem da lista e a métrica da comparação histórica.
 - **Esta semana:**
   - 3 números: **clientes acionados**, **pausas esperadas** entre eles e **faturamento de 26 s em jogo**;
   - uma barra com o mix por segmento.
-- **No teste histórico:** uma linha com a **precisão** por capacidade, com o modelo × a regra simples ("mais tempo sem comprar"). Texto curto: "Dos 100 primeiros, X% pausaram de fato, contra Y% pela regra simples".
+- **No teste histórico:** uma linha por capacidade, com o modelo × a regra simples ("mais tempo sem comprar"), na métrica do objetivo escolhido:
+  - "Evitar mais pausas": "Dos 100 primeiros, X% pausaram de fato, contra Y% pela regra simples";
+  - "Proteger mais valor": "Os 100 primeiros concentravam US$ X do valor das pausas reais, contra US$ Y pela regra simples".
+  Se a regra simples ganhar, o texto diz isso.
+- **Recortes sem dados ou com menos de 3 destaques no bloco 2:** mostrar o que existe e uma nota curta (G47).
 - **Filtros:**
   - não muda com o período nem com o segmento (foto fixa da semana 101). Nota igual às outras notas de filtro fixo;
   - o departamento não se aplica.
