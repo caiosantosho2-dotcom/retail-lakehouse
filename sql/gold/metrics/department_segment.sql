@@ -38,7 +38,7 @@ tot AS (
     GROUP BY ALL
 ),
 v AS (
-    SELECT x.period, x.subset, x.subset_mask, x.department, x.revenue, x.buyers, x.baskets,
+    SELECT x.period, x.subset, x.subset_mask, x.department, x.revenue, x.buyers, x.baskets, x.revenue_prior_year,
            share(x.revenue, tot.revenue) AS share,
            growth(x.revenue_comparable, x.revenue_prior_year) AS growth,
            penetration(x.buyers_comparable, tot.customers_comparable) AS penetration,
@@ -48,7 +48,7 @@ v AS (
     FROM x JOIN tot ON tot.period = x.period AND tot.subset = x.subset
     WHERE x.revenue > 0
 )
-SELECT v.period, v.subset, v.subset_mask, v.department, v.revenue, v.buyers, v.baskets,
+SELECT v.period, v.subset, v.subset_mask, v.department, v.revenue, v.buyers, v.baskets, v.revenue_prior_year,
        v.share, index_vs_all(v.share, t.share) AS share_index,
        v.growth, index_vs_all(1 + v.growth, 1 + t.growth) AS growth_index,
        v.penetration, index_vs_all(v.penetration, t.penetration) AS penetration_index,

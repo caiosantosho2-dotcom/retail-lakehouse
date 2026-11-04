@@ -277,12 +277,14 @@ METRICAS = [
     ("_basket_subcategory", "auxiliar"), ("basket_pair", "por_periodo_departamento"),
     ("network_node", "auxiliar"), ("_network_pair", "por_periodo"), ("network_node", "layout"),
     ("network_link", "tabela"), ("network_neighbor", "tabela"), ("network_characteristic", "tabela"),
+    ("crm_capacity", "tabela"), ("department_quadrant", "tabela"),   # blocos de decisão da Visão Geral (G45, G46)
 ]
 # Auxiliares que saem da memória depois do último passo que as usa (notebook com pouca RAM).
 LIBERAR = {"department_segment": ["_department_group"], "brand": ["_brand_cut"], "basket_pair": ["_basket_subcategory"],
            "network_characteristic": ["_item", "_network_pair"]}
 # Tabelas dos modelos que as métricas leem (da gold gravada, para a etapa de métricas rodar sozinha).
-MODELOS_LIDOS = {"customer_segment": "models/customer_segment", "churn_score": "models/churn_score"}
+MODELOS_LIDOS = {"customer_segment": "models/customer_segment", "churn_score": "models/churn_score",
+                 "churn_test_score": "models/churn_test_score", "churn_features": "features/churn_features"}
 
 
 def configurar_metricas(con, cfg: dict) -> None:
@@ -298,7 +300,8 @@ def configurar_metricas(con, cfg: dict) -> None:
         "weeks": pa.array([p["semanas"] for p in periodos], pa.int32()), "point_grain": [p["ponto"] for p in periodos]}))
     con.register("config_segment", pa.table({"segment": m["segmentos"],
                                              "bit": pa.array(range(len(m["segmentos"])), pa.int32())}))
-    variaveis = {"offset_dias": (m["offset_dias_ano_anterior"], "INTEGER"), "sem_segmento": (m["sem_segmento"], "VARCHAR"),
+    con.register("config_crm_capacity", pa.table({"capacity": pa.array(cfg["gold"]["crm"]["capacidades"], pa.int32())}))
+    variaveis ={"offset_dias": (m["offset_dias_ano_anterior"], "INTEGER"), "sem_segmento": (m["sem_segmento"], "VARCHAR"),
                  "periodo_base": (base[0], "VARCHAR"), "periodo_segmento": (segmento[0], "VARCHAR")}
     for chave, valor in {**m["limites"], **m["cesta"]}.items():
         variaveis[chave] = (valor, "DOUBLE" if isinstance(valor, float) else "INTEGER")

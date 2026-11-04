@@ -52,6 +52,7 @@ class Arquivo:
     atributos: str | None = None   # departamentos_ficha / _segmento: o 2º campo de cada atributo (percentil / indice)
     chave: tuple[str, ...] = ()    # grão: nenhuma linha pode repetir a combinação
     linhas: int | None = None      # número de linhas esperado, se fixo
+    so_com_ano_anterior: bool = False   # por período, sem a base inteira (não há crescimento para comparar, G46)
 
 
 # Na ordem do manifest (a do exportador do painel, com faturamento_tempo no lugar de cubo_faturamento).
@@ -63,6 +64,9 @@ ARQUIVOS = [
             chave=("periodo", "grupo", "departamento")),
     Arquivo("kpis_filtrados", "1 linha por período × subconjunto de segmentos × departamento", "abertura",
             dimensoes=("periodo", "subconjunto", "departamento"), chave=("periodo", "subconjunto", "departamento")),
+    Arquivo("acionamento_crm", "1 linha por capacidade de contato × método de priorização", "abertura", chave=("capacidade", "metodo")),
+    Arquivo("departamentos_quadrante", "1 linha por subconjunto de segmentos × departamento sem amostra pequena", "abertura", True,
+            chave=("subconjunto", "departamento"), so_com_ano_anterior=True),
     Arquivo("departamentos_ficha", "1 linha por departamento com faturamento no período", "categoria", True,
             atributos="percentil", chave=("departamento",)),
     Arquivo("departamentos_segmento", "1 linha por subconjunto de segmentos × departamento (ou 'todos')", "categoria", True,
@@ -102,8 +106,9 @@ def periodos(cfg: dict) -> list[str]:
 def nomes_arquivos(cfg: dict) -> list[tuple[Arquivo, str, str | None]]:
     """(arquivo, nome do JSON, período) de todos os arquivos, na ordem do manifest."""
     saida = []
+    com_ano_anterior = [p["periodo"] for p in cfg["gold"]["metricas"]["periodos"] if p["semanas"] is not None]
     for a in ARQUIVOS:
-        for p in (periodos(cfg) if a.por_periodo else [None]):
+        for p in ((com_ano_anterior if a.so_com_ano_anterior else periodos(cfg)) if a.por_periodo else [None]):
             saida.append((a, f"{a.base}_{p}.json" if p else f"{a.base}.json", p))
     return saida
 

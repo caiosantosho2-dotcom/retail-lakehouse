@@ -2,7 +2,7 @@
 
 > Registro das decisões do Caio, camada por camada, com o porquê. Formato de **ADR** (Architecture Decision Record): cada decisão diz o que foi decidido, o motivo e o que fica em aberto. Mudou uma decisão? Não apague: marque como "substituída" e escreva a nova.
 
-## To-do e pendências (atualizado em 03/11/2026)
+## To-do e pendências (atualizado em 04/11/2026)
 
 **A fazer (na ordem):**
 - [ ] Terminar o vídeo de arquitetura e encaixar aqui o que fizer sentido
@@ -21,6 +21,8 @@
   - [x] Comando único do pipeline, `python -m src.pipeline` (G42)
   - [x] Conferência contra o gabarito congelado do painel v3 (G44, 03/11/2026)
 - [ ] **Próximo passo: construir o painel v4** no repositório `retail-bi-dashboard`, como consumidor de `export/painel_v4/` (G43). Isso acontece numa sessão aberta lá; este projeto não altera aquele repositório.
+- [x] v4.1, Parte A: gold dos blocos de decisão, contrato 5.1 (G45–G47) → `docs/validacao/v4_1_gold.md`
+- [ ] v4.1, Parte B: blocos no painel, numa sessão aberta no `retail-bi-dashboard`. Antes, decidir o texto da comparação com a regra simples (G45)
 - [ ] Configuração do Claude (`CLAUDE.md`, skills, MCP, permissões): ver `claude/todo_configuracao_claude.md`
 - [x] Escrever a spec e o prompt da construção (bronze + `espiar.py` primeiro)
 
@@ -723,3 +725,29 @@ retail-lakehouse/
   - **Integridade da cópia:** 64 de 64 arquivos iguais ao blob do git na tag, e 62 de 62 sha256 iguais ao manifest da própria tag.
   - **Fora do git:** a pasta fica sob `data/`, como os outros dados (5,8 MB). O código e o config de exemplo só guardam o caminho. Num clone novo, os comandos para recriá-la estão no `CLAUDE.md`; se ela faltar, a conferência sai com código 1 em vez de passar.
   - **Resultado, `python -m src.pipeline` nos dados reais:** código 0 em 205 s (bronze 14 s, silver 31 s, gold build 120 s, export 26 s, reconcile 14 s). A conferência é a mesma de antes: 42 de 43 arquivos idênticos, 54.130 de 54.131 linhas, 0 diferenças sem explicação (só a G35) e 20 de 20 gabaritos. Testes: 121 passam.
+
+### Blocos de decisão da Visão Geral, v4.1 (04/11/2026)
+> Spec: `docs/spec_v4_1_blocos_decisao.md`, Parte A. Validação: `docs/validacao/v4_1_gold.md`. G45 e G46 vêm da spec; G47 reúne as decisões pequenas tomadas na construção, a revisar pelo Caio.
+
+- **G45. Bloco 1, "Quem acionar": `gold/metrics/crm_capacity`.**
+  - **Decisão que apoia:** se o CRM só consegue acionar N clientes, quem priorizar e o que isso protege.
+  - **Ordem:** `priority_score = probabilidade × faturamento de 26 s`, decrescente; empate pelo `household_key`. A regra simples (`baseline`) é mais semanas sem comprar; empate pelo faturamento de 26 s e depois pelo `household_key`.
+  - **⚠️ `priority_score` NÃO é o "dinheiro em risco" da G4.** Aquela métrica continua única: faturamento de 26 s de quem tem probabilidade ≥ 0,17, sem ponderar (`department_risk`). A `priority_score` serve só para ordenar e não é exportada. A conta é a mesma da fórmula descartada na G4 (`faturamento_em_risco` da lista de ação do painel), mas aqui ela não é apresentada como valor em dólar. `revenue_26s_at_stake` é a soma simples do faturamento dos N primeiros, sem ponderar.
+  - **Sem vazamento:** no teste (fotos 85 e 93), o faturamento é o de 26 s até a foto, de `churn_features` (`log_value_26w` volta ao valor original com `exp(x) − 1`, G21). O modelo não muda.
+  - **Resultado que contraria a expectativa da spec (registrado sem forçar):** a `hist_precision` de `model` fica **abaixo** da de `baseline` em **6 de 6** capacidades (N = 100: 13,0% × 28,0%). **Por quê:** quem tende a pausar gasta pouco (correlação de −0,75 entre probabilidade e log do faturamento; mediana de US$ 160 entre quem pausou e US$ 703 entre quem não pausou). Multiplicar pelo faturamento leva a lista para clientes valiosos com risco menor: a ordem troca acerto por valor. **O modelo não é o problema:** ordenando só pela probabilidade, a precisão (N = 100: 32,0%) fica acima da regra simples em 6 de 6. Pelo valor das pausas capturadas, a `priority_score` ganha da regra simples em 5 de 6, com margem pequena (N = 100 é a exceção: US$ 5.988 × US$ 6.600). **Pendente para o Caio, antes da Parte B:** o texto da B2 ("Dos 100 primeiros, X% pausaram de fato, contra Y% pela regra simples") mostraria 13% × 28%.
+- **G46. Bloco 2, "Onde agir no mix": `gold/metrics/department_quadrant`.**
+  - **Decisão que apoia:** quais departamentos atacar primeiro, com atenção limitada a 3 em destaque.
+  - **Cortes:** participação = mediana dos departamentos válidos do recorte; crescimento = o **crescimento total do recorte**, não zero, porque a pergunta é "quem puxa para baixo em relação ao negócio", não "quem caiu". Igual ao corte conta como "acima".
+  - **Quadrantes:** `invest` (abaixo, acima), `keep` (acima, acima), `defend` (acima, abaixo), `review` (abaixo, abaixo), na ordem participação, crescimento.
+  - **`gap_value`** = faturamento do ano anterior × (crescimento − corte). **`highlight_rank`** = os 3 de `defend` com o gap mais negativo.
+  - **A base inteira fica fora** (sem crescimento comparável, G2c): não há linha na tabela nem arquivo `departamentos_quadrante_base.json`.
+- **G47. Decisões pequenas da construção (Claude, a revisar):**
+  - **Amostra pequena = qualquer uma das duas definições.** A spec cita as duas tabelas de origem, cada uma com um critério: menos de 0,1% do faturamento do período (`department_profile`) ou menos de 30 compradores no subconjunto (`department_segment`). Só com a segunda, entrariam 19 departamentos em 26 s, e não 14, entre eles CHEF SHOPPE com +2.749% e o corte de participação cairia. Critério mais conservador; a conta de `share` = 1 continua fechando com os que ficam fora.
+  - **Crescimento nulo fica fora**, porque não dá para pôr no gráfico. Hoje são 0 linhas entre os válidos.
+  - **`department_segment` ganhou a coluna `revenue_prior_year`.** Ela já era somada na consulta, mas não era gravada, e o `gap_value` precisa dela. Acrescenta sem recalcular; a exportação escolhe as colunas pelo nome e os 47 arquivos anteriores continuam idênticos byte a byte.
+  - **Valores em português nos JSON novos, como em `lab_modelo`:** `metodo` = `modelo` ou `regra_simples`; `quadrante` = `investir`, `manter`, `defender` ou `rever`. A spec só dava os nomes das colunas do CRM. As do quadrante ficaram `participacao`, `crescimento`, `corte_participacao`, `corte_crescimento`, `quadrante`, `valor_gap` e `destaque`.
+  - **`departamentos_quadrante_<p>.json` também é carga `abertura`,** porque o bloco fica na Visão Geral. `bytes_abertura` foi de 446.719 para 582.652, abaixo do limite de 1,5 MB.
+  - **`segment_mix`:** lista de `{segment, customers}` na gold, objeto no JSON, com os 4 segmentos mesmo quando dão zero (Em pausa dá zero, porque quem está em pausa não entra na população do modelo).
+  - **Capacidade maior que a população:** aciona quem existe. Não acontece nos dados reais (população de 2.203).
+  - **Recortes pequenos ficam como estão:** "Em pausa" em 4 s não tem nenhum departamento válido (0 linhas), e em 13 s tem 1. Alguns recortes têm menos de 3 destaques, porque têm menos de 3 departamentos em `defend`. A Parte B precisa tratar esses casos.
+  - **Tolerâncias do caminho 2 dos blocos:** só no último dígito arredondado (0,0001 nas frações, US$ 0,01 no dinheiro), porque ele soma de outra forma (faturamento da silver em `DOUBLE`, não pela volta do log). Quadrante, destaque, mix e conjunto de linhas exigem igualdade.

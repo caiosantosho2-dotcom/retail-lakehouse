@@ -9,9 +9,11 @@ from __future__ import annotations
 import dataclasses
 import importlib.util
 import json
+import math
 import shutil
 from pathlib import Path
 
+import duckdb
 import pyarrow as pa
 import pytest
 import yaml
@@ -459,10 +461,10 @@ def test_compactar_ida_e_volta_feito_a_mao():
 def test_exportacao_valida_todos_os_arquivos_e_o_manifest(exportado, cfg):
     pasta = cfg["paths"]["export"]
     nomes = [n for _, n, _ in export.nomes_arquivos(cfg)]
-    assert len(nomes) == 47 and set(foto(pasta)) == {*nomes, "manifest.json"}
+    assert len(nomes) == 51 and set(foto(pasta)) == {*nomes, "manifest.json"}
     assert export.validar(pasta, cfg) == []
     m = json.loads((pasta / "manifest.json").read_text(encoding="utf-8"))
-    assert m["versao_contrato"] == "5.0" and [a["nome"] for a in m["arquivos"]] == nomes
+    assert m["versao_contrato"] == "5.1" and [a["nome"] for a in m["arquivos"]] == nomes
     assert m["silver_versoes"] == {t: 0 for t in build.SILVER.values()}
     assert not any(pasta.parent.glob("*.tmp")) and not any(pasta.parent.glob("*.old"))
 
@@ -544,3 +546,222 @@ def test_faturamento_tempo_exportado_bate_com_sql_proprio(exportado, cfg):
             assert t["iguais"] == t["proprio"] == t["exportado"] > 0, t
     finally:
         c.con.close()
+
+
+# ---------------------------------------------------------------- blocos de decisão v4.1 (G45, G46)
+
+def _macros() -> duckdb.DuckDBPyConnection:
+    c = duckdb.connect()
+    c.execute(build.MACROS_SQL.read_text(encoding="utf-8"))
+    return c
+
+
+def _crm(final: list[tuple], teste: list[tuple], capacidades: list[int], segmentos=("Fiéis", "Regulares")) -> dict:
+    """Roda o SQL de crm_capacity sobre um caso feito à mão. final = (cliente, probabilidade, faturamento, segmento);
+    teste = (cliente, foto, rótulo, nota do modelo, semanas sem comprar, faturamento até a foto)."""
+    c = _macros()
+    c.register("config_crm_capacity", pa.table({"capacity": pa.array(capacidades, pa.int32())}))
+    c.register("config_segment", pa.table({"segment": list(segmentos), "bit": pa.array(range(len(segmentos)), pa.int32())}))
+    c.register("churn_score", pa.table({"household_key": [l[0] for l in final], "probability": [l[1] for l in final],
+                                        "segment": [l[3] for l in final]}))
+    c.register("churn_test_score", pa.table({"household_key": [l[0] for l in teste], "snapshot_week": [l[1] for l in teste],
+                                             "label": [l[2] for l in teste], "model_score": [l[3] for l in teste],
+                                             "baseline_score": [float(l[4]) for l in teste]}))
+    features = [(l[0], 101, "final", math.log1p(l[2])) for l in final] + [(l[0], l[1], "teste", math.log1p(l[5])) for l in teste]
+    c.register("churn_features", pa.table({"household_key": [l[0] for l in features], "snapshot_week": [l[1] for l in features],
+                                           "role": [l[2] for l in features], "log_value_26w": [l[3] for l in features]}))
+    cur = c.execute(build._sql_metrica("crm_capacity"))
+    colunas = [d[0] for d in cur.description]
+    return {(l[0], l[1]): dict(zip(colunas, l)) for l in cur.fetchall()}
+
+
+def test_crm_ordena_pela_prioridade_e_o_empate_vai_para_o_menor_cliente():
+    # prioridades: cliente 1 = 0,5 × 100 = 50; 2 e 3 = 0,3 × 300 = 90 (empate exato); 4 = 0,1 × 100 = 10
+    final = [(3, 0.3, 300.0, "Regulares"), (1, 0.5, 100.0, "Fiéis"), (2, 0.3, 300.0, "Fiéis"), (4, 0.1, 100.0, "Regulares")]
+    teste = [(1, 85, 1, 0.5, 1, 100.0), (2, 85, 0, 0.5, 1, 100.0)]
+    r = _crm(final, teste, [1, 2, 3])
+    # N = 1: o empate vai para o cliente 2 (menor household_key), e não para o 3 nem para o 1 (maior probabilidade)
+    assert abs(r[(1, "model")]["pauses_expected"] - 0.3) < 1e-9
+    assert abs(r[(1, "model")]["revenue_26s_at_stake"] - 300) < 1e-6
+    assert [(m["segment"], m["customers"]) for m in r[(1, "model")]["segment_mix"]] == [("Fiéis", 1), ("Regulares", 0)]
+    assert [(m["segment"], m["customers"]) for m in r[(2, "model")]["segment_mix"]] == [("Fiéis", 1), ("Regulares", 1)]
+    assert abs(r[(3, "model")]["pauses_expected"] - 1.1) < 1e-9                  # o cliente 1 entra depois dos dois
+
+
+def test_crm_regra_simples_desempata_pelo_faturamento_e_nao_tem_numeros_da_semana():
+    final = [(1, 0.5, 100.0, "Fiéis")]
+    # foto 85: todos com 3 semanas sem comprar, exceto o 4 (5 semanas). Ordem da regra: 4; depois 2 e 3 (mais faturamento); 1.
+    teste = [(1, 85, 1, 0.9, 3, 10.0), (2, 85, 0, 0.1, 3, 50.0), (3, 85, 1, 0.1, 3, 50.0), (4, 85, 1, 0.1, 5, 1.0)]
+    r = _crm(final, teste, [1, 2, 3])
+    assert r[(1, "baseline")]["hist_precision"] == 1.0                # 4 pausou
+    assert r[(2, "baseline")]["hist_precision"] == 0.5                # 4 pausou, 2 não (2 vem antes do 3 no empate)
+    assert abs(r[(3, "baseline")]["hist_precision"] - 2 / 3) < 1e-12
+    assert r[(1, "baseline")]["pauses_expected"] is None
+    assert r[(1, "baseline")]["revenue_26s_at_stake"] is None
+    assert r[(1, "baseline")]["segment_mix"] is None
+
+
+def test_crm_precisao_e_recall_a_mao_media_das_duas_fotos():
+    final = [(1, 0.5, 100.0, "Fiéis")]
+    teste = [
+        # foto 85: prioridades 90 (cliente 1, pausou), 40 (2, não), 10 (3, pausou). 2 pausas reais.
+        (1, 85, 1, 0.9, 1, 100.0), (2, 85, 0, 0.4, 2, 100.0), (3, 85, 1, 0.1, 3, 100.0),
+        # foto 93: prioridades 80 (1, não), 50 (2, pausou), 20 (3, não). 1 pausa real.
+        (1, 93, 0, 0.8, 3, 100.0), (2, 93, 1, 0.5, 1, 100.0), (3, 93, 0, 0.2, 2, 100.0),
+    ]
+    r = _crm(final, teste, [1, 2])
+    # N = 1: foto 85 acerta 1 de 1 (precisão 1, recall 1/2); foto 93 acerta 0 de 1 (0 e 0)
+    assert abs(r[(1, "model")]["hist_precision"] - (1 + 0) / 2) < 1e-12
+    assert abs(r[(1, "model")]["hist_pauses_caught_share"] - (1 / 2 + 0) / 2) < 1e-12
+    # N = 2: foto 85 acerta 1 de 2 (1/2 e 1/2); foto 93 acerta 1 de 2 (1/2 e 1)
+    assert abs(r[(2, "model")]["hist_precision"] - 0.5) < 1e-12
+    assert abs(r[(2, "model")]["hist_pauses_caught_share"] - (1 / 2 + 1) / 2) < 1e-12
+
+
+def test_crm_no_teste_usa_o_faturamento_ate_a_foto_e_nao_o_de_hoje():
+    # hoje o cliente 2 vale muito mais, mas na foto 85 quem valia mais era o 1: a ordem do teste não olha o futuro
+    final = [(1, 0.5, 1.0, "Fiéis"), (2, 0.5, 1000.0, "Fiéis")]
+    teste = [(1, 85, 1, 0.5, 1, 500.0), (2, 85, 0, 0.5, 1, 5.0)]
+    assert _crm(final, teste, [1])[(1, "model")]["hist_precision"] == 1.0
+
+
+def test_crm_capacidade_maior_que_a_populacao_aciona_quem_existe():
+    final = [(1, 0.2, 100.0, "Fiéis"), (2, 0.3, 100.0, "Fiéis")]
+    teste = [(1, 85, 1, 0.5, 1, 100.0), (2, 85, 0, 0.1, 1, 100.0)]
+    r = _crm(final, teste, [10])
+    assert abs(r[(10, "model")]["pauses_expected"] - 0.5) < 1e-9
+    assert r[(10, "model")]["hist_precision"] == 0.5 and r[(10, "model")]["hist_pauses_caught_share"] == 1.0
+
+
+def test_crm_na_gold_sintetica_grao_e_mix(cfg, con):
+    registrar_delta(con, "crm_capacity", caminho_tabela(cfg, "gold", "metrics/crm_capacity"))
+    capacidades = cfg["gold"]["crm"]["capacidades"]
+    assert capacidades == [25, 50, 100, 150, 200, 300]
+    linhas = con.execute("SELECT capacity, method, segment_mix FROM crm_capacity").fetchall()
+    assert {(n, m) for n, m, _ in linhas} == {(n, m) for n in capacidades for m in ("model", "baseline")} and len(linhas) == 12
+    populacao = um(con, "SELECT count(*) FROM churn_score")[0]
+    for n, metodo, mix in linhas:
+        if metodo == "model":
+            assert sum(m["customers"] for m in mix) == min(n, populacao)
+
+
+def test_macro_do_quadrante_nos_4_cantos_e_na_linha_do_corte():
+    c = _macros()
+    casos = {(0.1, 0.5, 0.9, 0.5): "invest", (0.9, 0.5, 0.9, 0.5): "keep", (0.9, 0.5, 0.1, 0.5): "defend", (0.1, 0.5, 0.1, 0.5): "review",
+             # igual ao corte conta como "acima"
+             (0.5, 0.5, 0.9, 0.5): "keep", (0.5, 0.5, 0.1, 0.5): "defend", (0.1, 0.5, 0.5, 0.5): "invest", (0.5, 0.5, 0.5, 0.5): "keep"}
+    for argumentos, esperado in casos.items():
+        assert c.execute(f"SELECT quadrant_of{argumentos}").fetchall()[0][0] == esperado, argumentos
+    assert abs(c.execute("SELECT gap_value(1000, 0.02, 0.05)").fetchall()[0][0] - -30) < 1e-9
+
+
+def _quadrante(linhas: list[tuple]) -> dict:
+    """Roda o SQL de department_quadrant num caso à mão. linhas = (período, subconjunto, departamento, share, growth,
+    ano anterior, amostra pequena no subconjunto, amostra pequena no período)."""
+    c = _macros()
+    c.execute("SET VARIABLE periodo_base = 'base'")
+    c.register("department_segment", pa.table({
+        "period": [l[0] for l in linhas], "subset": [l[1] for l in linhas], "subset_mask": pa.array([0] * len(linhas), pa.int64()),
+        "department": [l[2] for l in linhas], "share": [l[3] for l in linhas], "growth": pa.array([l[4] for l in linhas], pa.float64()),
+        "revenue_prior_year": [l[5] for l in linhas], "small_sample": [l[6] for l in linhas]}))
+    perfil = [l for l in linhas if l[2] != "todos"]
+    c.register("department_profile", pa.table({"period": [l[0] for l in perfil], "department": [l[2] for l in perfil],
+                                               "small_sample": [l[7] for l in perfil]}))
+    cur = c.execute(build._sql_metrica("department_quadrant"))
+    colunas = [d[0] for d in cur.description]
+    return {(l[0], l[1], l[3]): dict(zip(colunas, l)) for l in cur.fetchall()}
+
+
+def test_quadrante_cortes_gap_e_destaques():
+    def d(nome, share, growth, ano=1000.0, pequena=False):
+        return ("26s", "todos", nome, share, growth, ano, pequena, pequena)
+    r = _quadrante([
+        ("26s", "todos", "todos", 1.0, 0.05, 1.0, False, False),
+        d("A", 0.40, 0.01, 1000.0), d("B", 0.30, 0.02, 3000.0), d("C", 0.20, -0.05, 100.0), d("D", 0.05, 0.10), d("E", 0.04, 0.0),
+        d("F", 0.01, 0.50, pequena=True),
+    ])
+    assert "F" not in {k[2] for k in r}                                          # amostra pequena fica fora
+    assert {v["share_cut"] for v in r.values()} == {0.20}                        # mediana dos 5 válidos, sem o F
+    assert {v["growth_cut"] for v in r.values()} == {0.05}                       # o total do recorte, não zero
+    assert {k[2]: v["quadrant"] for k, v in r.items()} == {"A": "defend", "B": "defend", "C": "defend", "D": "invest", "E": "review"}
+    assert abs(r[("26s", "todos", "B")]["gap_value"] - 3000 * (0.02 - 0.05)) < 1e-9
+    # os 3 de defend, do gap mais negativo para o menos: B (−90), A (−40), C (−10); ninguém mais tem rank
+    assert {k[2]: v["highlight_rank"] for k, v in r.items()} == {"A": 2, "B": 1, "C": 3, "D": None, "E": None}
+
+
+def test_quadrante_so_3_destaques_e_empate_pelo_departamento():
+    linhas = [("26s", "todos", "todos", 1.0, 0.5, 1.0, False, False)]
+    linhas += [("26s", "todos", n, 0.2, 0.0, 100.0, False, False) for n in "DCBA"]
+    r = _quadrante(linhas)
+    assert {k[2]: v["highlight_rank"] for k, v in r.items()} == {"A": 1, "B": 2, "C": 3, "D": None}
+
+
+def test_quadrante_base_inteira_e_crescimento_nulo_ficam_fora():
+    r = _quadrante([
+        ("base", "todos", "todos", 1.0, None, 0.0, False, False), ("base", "todos", "A", 0.9, None, 0.0, False, False),
+        ("26s", "todos", "todos", 1.0, 0.0, 1.0, False, False), ("26s", "todos", "A", 0.9, 0.1, 1.0, False, False),
+        ("26s", "todos", "B", 0.1, None, 0.0, False, False),
+    ])
+    assert list(r) == [("26s", "todos", "A")]
+
+
+def test_quadrante_na_gold_sintetica_share_e_base_ausente(cfg, con):
+    registrar_delta(con, "department_quadrant", caminho_tabela(cfg, "gold", "metrics/department_quadrant"))
+    assert {r[0] for r in con.execute("SELECT DISTINCT period FROM department_quadrant").fetchall()} <= {"4s", "13s", "26s"}
+    # soma de share = 1 entre os válidos e os fora do quadrante
+    fora = con.execute("""
+        SELECT s.period, s.subset, sum(s.share) FROM department_segment s
+        WHERE s.department <> 'todos' AND s.period <> 'base' GROUP BY 1, 2 HAVING abs(sum(s.share) - 1) > 1e-9""").fetchall()
+    assert fora == []
+    assert um(con, """SELECT count(*) FROM (SELECT period, subset, department FROM department_quadrant GROUP BY ALL HAVING count(*) > 1)""")[0] == 0
+    assert um(con, "SELECT count(*) FROM department_quadrant WHERE highlight_rank IS NOT NULL AND quadrant <> 'defend'")[0] == 0
+
+
+def test_contrato_5_1_arquivos_novos_e_base_ausente(exportado, cfg):
+    pasta = cfg["paths"]["export"]
+    nomes = {n for _, n, _ in export.nomes_arquivos(cfg)}
+    assert {"acionamento_crm.json", "departamentos_quadrante_4s.json", "departamentos_quadrante_13s.json",
+            "departamentos_quadrante_26s.json"} <= nomes
+    assert "departamentos_quadrante_base.json" not in nomes
+    assert "acionamento_crm" in {a.base for a in export.ARQUIVOS if a.carga == "abertura"}
+    linhas = json.loads((pasta / "acionamento_crm.json").read_text(encoding="utf-8"))["linhas"]
+    assert list(linhas[0]) == ["capacidade", "metodo", "pausas_esperadas", "faturamento_26s_em_jogo", "mix_segmentos",
+                               "precisao_historica", "pausas_capturadas_historica"]
+    assert [(l["capacidade"], l["metodo"]) for l in linhas[:2]] == [(25, "modelo"), (25, "regra_simples")]
+    assert list(linhas[0]["mix_segmentos"]) == cfg["gold"]["metricas"]["segmentos"]
+    assert linhas[1]["mix_segmentos"] is None and linhas[1]["pausas_esperadas"] is None
+
+
+def test_contrato_5_1_recusa_outra_versao_e_arquivo_da_base(exportado, cfg, tmp_path):
+    pasta = tmp_path / "copia"
+    shutil.copytree(cfg["paths"]["export"], pasta)
+    (pasta / "departamentos_quadrante_base.json").write_text('{"grao":"x","linhas":[]}', encoding="utf-8")
+    assert "departamentos_quadrante_base.json: arquivo fora do contrato" in export.validar(pasta, cfg)
+    (pasta / "departamentos_quadrante_base.json").unlink()
+    m = json.loads((pasta / "manifest.json").read_text(encoding="utf-8"))
+    m["versao_contrato"] = "5.0"
+    (pasta / "manifest.json").write_text(json.dumps(m, ensure_ascii=False), encoding="utf-8")
+    assert any(e.startswith("manifest.json: versao_contrato") for e in export.validar(pasta, cfg))
+
+
+def test_conferencia_dos_blocos_por_sql_proprio(exportado, cfg):
+    c = reconcile.Caminho2(cfg)
+    pasta = cfg["paths"]["export"]
+    try:
+        crm = export.expandir(json.loads((pasta / "acionamento_crm.json").read_text(encoding="utf-8")))
+        checks = c.crm(crm)
+        assert checks and all(x["ok"] for x in checks), [x for x in checks if not x["ok"]]
+        # um valor estragado é acusado
+        crm[0]["precisao_historica"] = 0.0 if crm[0]["precisao_historica"] else 1.0
+        assert not all(x["ok"] for x in c.crm(crm))
+        for p in ("4s", "13s", "26s"):
+            q = c.quadrante(p, export.expandir(json.loads((pasta / f"departamentos_quadrante_{p}.json").read_text(encoding="utf-8"))))
+            assert q["iguais"] == q["proprio"] == q["exportado"] and q["soma_share_ok"], q
+    finally:
+        c.con.close()
+
+
+def test_pausas_com_a_populacao_inteira_somam_todas_as_probabilidades(exportado, cfg, con):
+    n, pausas = reconcile.pausas_populacao_inteira(cfg)
+    total, quantos = um(con, "SELECT sum(probability), count(*) FROM churn_score")
+    assert n == quantos and abs(pausas - total) < 1e-9

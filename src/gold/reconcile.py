@@ -11,6 +11,10 @@ Diferença só passa se estiver em `gold.conferencia.excecoes` (com o motivo reg
 
 Caminho 2, gabaritos fixos do config, recalculados por SQL próprio direto da silver (sem as macros e sem as views da
 gold; os períodos também são refeitos aqui) e comparados com o valor esperado e com o que a gold gravou.
+Blocos de decisão (contrato 5.1, G45 e G46): acionamento_crm e departamentos_quadrante não existem no publicado. São
+refeitos pelo caminho 2: o faturamento de 26 s até cada foto sai da silver (não das features), a ordenação e as contas
+são escritas aqui, e os quadrantes são remontados a partir da venda. As pausas esperadas com N = população inteira
+rodam o próprio SQL de crm_capacity e têm de dar o gabarito `pausas_esperadas`.
 Termina com código 1 se houver diferença sem explicação ou gabarito que não bate.
 """
 from __future__ import annotations
@@ -19,12 +23,16 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from statistics import median
+
+import pyarrow as pa
 
 from src.comum import caminho_tabela, carregar_config, conectar_duckdb, registrar_delta
 from src.gold import build
 from src.gold.export import ARQUIVOS, expandir, nomes_arquivos, schema_de
 
 SECOES_MANIFEST = ["periodo_base", "janelas", "modelo", "parametros_cesta", "parametros_rede", "parametros_laboratorio"]
+NOVOS_V41 = ("acionamento_crm", "departamentos_quadrante")   # contrato 5.1: não existem no gabarito congelado; caminho 2
 
 
 # ---------------------------------------------------------------- caminho 1
@@ -97,7 +105,7 @@ def caminho_1(cfg: dict) -> list[dict]:
     chaves = {a.base: a.chave for a in ARQUIVOS}
     saida = []
     for _, nome, _ in nomes_arquivos(cfg):
-        if schema_de(nome) == "faturamento_tempo":
+        if schema_de(nome) in ("faturamento_tempo", *NOVOS_V41):
             continue
         e = json.loads((exp / nome).read_text(encoding="utf-8"))
         p = json.loads((pub / nome).read_text(encoding="utf-8"))
@@ -138,7 +146,8 @@ class Caminho2:
         registrar_delta(con, "f", caminho_tabela(cfg, "silver", build.SILVER["fact_sales"]))
         registrar_delta(con, "d", caminho_tabela(cfg, "silver", build.SILVER["dim_date"]))
         registrar_delta(con, "pr", caminho_tabela(cfg, "silver", build.SILVER["dim_product"]))
-        for t in ["kpi_filtered", "cube_period", "period_comparable_store", "revenue_over_time", "department_risk"]:
+        for t in ["kpi_filtered", "cube_period", "period_comparable_store", "revenue_over_time", "department_risk",
+                  "department_segment", "department_quadrant"]:
             registrar_delta(con, t, caminho_tabela(cfg, "gold", f"metrics/{t}"))
         for t in ["customer_segment", "churn_score", "churn_test_score", "churn_classifier", "model_summary"]:
             registrar_delta(con, t, caminho_tabela(cfg, "gold", f"models/{t}"))
@@ -250,8 +259,160 @@ class Caminho2:
                          for k in sorted(set(proprio) | set(exp), key=str) if not (k in proprio and k in exp and igual(list(proprio[k]), list(exp[k])))), "")
         return {"periodo": periodo, "ponto": ponto, "proprio": len(proprio), "exportado": len(exp), "iguais": iguais, "primeira": primeira}
 
+    # ------------------------------------------------------------ blocos de decisão (G45, G46)
 
-def caminho_2(cfg: dict) -> tuple[list[tuple], list[dict]]:
+    def crm(self, exportadas: list[dict]) -> list[dict]:
+        """acionamento_crm exportado × SQL próprio: as contas da semana e a precisão e o recall por capacidade."""
+        idx = {(l["capacidade"], l["metodo"]): l for l in exportadas}
+        capacidades = self.cfg["gold"]["crm"]["capacidades"]
+        semana = self.con.execute(f"""
+            WITH r AS (SELECT household_key, sum(fat) AS rev FROM v
+                       WHERE week_no BETWEEN {self.fim} - {self.cfg['gold']['janela']['semanas']} + 1 AND {self.fim} GROUP BY 1)
+            SELECT c.probability, r.rev, c.segment FROM churn_score c JOIN r USING (household_key)
+            ORDER BY c.probability * r.rev DESC, c.household_key""").fetchall()
+        teste = self.con.execute(f"""
+            WITH r AS (SELECT t.household_key, t.snapshot_week, sum(v.fat) AS rev
+                       FROM churn_test_score t JOIN v ON v.household_key = t.household_key
+                        AND v.week_no BETWEEN t.snapshot_week - {self.cfg['gold']['janela']['semanas']} + 1 AND t.snapshot_week
+                       GROUP BY 1, 2)
+            SELECT t.snapshot_week, t.label, t.household_key, t.model_score * r.rev AS prioridade, t.baseline_score, r.rev
+            FROM churn_test_score t JOIN r USING (household_key, snapshot_week)""").fetchall()
+        fotos = sorted({l[0] for l in teste})
+        ordens = {"modelo": lambda l: (-l[3], l[2]), "regra_simples": lambda l: (-l[4], -l[5], l[2])}
+        checks = []
+        for n in capacidades:
+            topo = semana[:n]
+            modelo = idx.get((n, "modelo"), {})
+            mix: dict[str, int] = {}
+            for _, _, seg in topo:
+                mix[seg] = mix.get(seg, 0) + 1
+            achado = {k: v for k, v in (modelo.get("mix_segmentos") or {}).items() if v}
+            checks += [
+                {"nome": f"pausas_esperadas N={n}", "proprio": round(sum(l[0] for l in topo), 4), "exportado": modelo.get("pausas_esperadas"), "tol": 1e-4},
+                {"nome": f"faturamento_26s N={n}", "proprio": round(sum(l[1] for l in topo), 2), "exportado": modelo.get("faturamento_26s_em_jogo"), "tol": 0.01},
+                {"nome": f"mix_segmentos N={n}", "proprio": sorted(mix.items()), "exportado": sorted(achado.items()), "tol": None},
+            ]
+            for metodo, ordem in ordens.items():
+                precisoes, recalls = [], []
+                for f in fotos:
+                    da_foto = sorted((l for l in teste if l[0] == f), key=ordem)
+                    acertos = sum(l[1] for l in da_foto[:n])
+                    precisoes.append(acertos / len(da_foto[:n]))
+                    recalls.append(acertos / sum(l[1] for l in da_foto))
+                linha = idx.get((n, metodo), {})
+                checks += [
+                    {"nome": f"precisao {metodo} N={n}", "proprio": round(sum(precisoes) / len(fotos), 4), "exportado": linha.get("precisao_historica"), "tol": 1e-4},
+                    {"nome": f"recall {metodo} N={n}", "proprio": round(sum(recalls) / len(fotos), 4), "exportado": linha.get("pausas_capturadas_historica"), "tol": 1e-4},
+                ]
+        for c in checks:
+            c["ok"] = c["exportado"] is not None and (
+                c["proprio"] == c["exportado"] if c["tol"] is None else abs(c["proprio"] - c["exportado"]) <= c["tol"] + 1e-9)
+        return checks
+
+    def quadrante(self, periodo: str, exportadas: list[dict]) -> dict:
+        """departamentos_quadrante exportado × montado aqui a partir da venda (todos os subconjuntos do período)."""
+        ini = self.periodos[periodo][0]
+        m = self.cfg["gold"]["metricas"]
+        linhas = self.con.execute(f"""
+            WITH vg AS (SELECT v.*, coalesce(s.segment, '{self.sem_segmento}') AS grupo
+                        FROM v LEFT JOIN customer_segment s USING (household_key)),
+                 l AS {self.lojas(ini)}
+            SELECT grupo, department,
+                   coalesce(sum(fat) FILTER (WHERE week_no BETWEEN {ini} AND {self.fim}), 0),
+                   coalesce(sum(fat) FILTER (WHERE week_no BETWEEN {ini} AND {self.fim} AND store_id IN (SELECT * FROM l)), 0),
+                   coalesce(sum(fat) FILTER (WHERE week_no BETWEEN {ini - self.ano} AND {self.fim - self.ano} AND store_id IN (SELECT * FROM l)), 0),
+                   count(DISTINCT household_key) FILTER (WHERE week_no BETWEEN {ini} AND {self.fim})
+            FROM vg GROUP BY 1, 2""").fetchall()
+        segmentos = m["segmentos"]
+        subconjuntos = {"todos": set(segmentos) | {self.sem_segmento}}
+        for mascara in range(1, 1 << len(segmentos)):
+            nomes = [s for b, s in enumerate(segmentos) if mascara >> b & 1]
+            subconjuntos["+".join(nomes)] = set(nomes)
+
+        def soma(grupos: set) -> dict[str, list]:
+            saida: dict[str, list] = {}
+            for grupo, dep, fat, comp, ant, compradores in linhas:
+                if grupo in grupos:
+                    t = saida.setdefault(dep, [0.0, 0.0, 0.0, 0])
+                    t[0] += fat; t[1] += comp; t[2] += ant; t[3] += compradores
+            return saida
+
+        todos_fat = {d: t[0] for d, t in soma(subconjuntos["todos"]).items()}
+        total_todos = sum(todos_fat.values())
+        proprio = {}
+        for subset, grupos in subconjuntos.items():
+            t = soma(grupos)
+            fat = sum(x[0] for x in t.values())
+            comp, ant = sum(x[1] for x in t.values()), sum(x[2] for x in t.values())
+            if not fat or not ant:
+                continue
+            corte_g = comp / ant - 1
+            validos = {d: x for d, x in t.items() if x[0] > 0 and x[2] > 0 and x[3] >= m["limites"]["grupo_compradores"]
+                       and todos_fat[d] / total_todos >= m["limites"]["departamento_participacao"]}
+            if not validos:
+                continue
+            corte_s = median(x[0] / fat for x in validos.values())
+            q = {}
+            for d, x in validos.items():
+                share, g = x[0] / fat, x[1] / x[2] - 1
+                nome = ({True: "manter", False: "investir"} if g >= corte_g else {True: "defender", False: "rever"})[share >= corte_s]
+                q[d] = {"participacao": share, "crescimento": g, "corte_participacao": corte_s, "corte_crescimento": corte_g,
+                        "quadrante": nome, "valor_gap": x[2] * (g - corte_g), "destaque": None}
+            defender = sorted((d for d in q if q[d]["quadrante"] == "defender"), key=lambda d: (q[d]["valor_gap"], d))
+            for i, d in enumerate(defender[:3], 1):
+                q[d]["destaque"] = i
+            for d, v in q.items():
+                proprio[(subset, d)] = v
+        exp = {(l["subconjunto"], l["departamento"]): l for l in exportadas}
+        tolerancia = {"participacao": 1e-4, "crescimento": 1e-4, "corte_participacao": 1e-4, "corte_crescimento": 1e-4, "valor_gap": 0.01}
+        iguais, primeira = 0, ""
+        for k in sorted(set(proprio) | set(exp), key=str):
+            a, b = proprio.get(k), exp.get(k)
+            ok = a is not None and b is not None and all(
+                a[c] == b[c] if c not in tolerancia else abs(a[c] - b[c]) <= tolerancia[c] for c in a)
+            iguais += ok
+            if not ok and not primeira:
+                primeira = f"{k}: SQL próprio {a}, exportado {b}"
+        # Na gold gravada: soma de share = 1 entre os válidos (em department_quadrant) e os fora dela (amostra pequena), e
+        # cada válido em exatamente um dos 4 quadrantes.
+        fora = [s for s, v in self.con.execute(f"""
+            SELECT s.subset, coalesce(sum(s.share) FILTER (WHERE q.department IS NOT NULL), 0)
+                             + coalesce(sum(s.share) FILTER (WHERE q.department IS NULL), 0)
+            FROM department_segment s
+            LEFT JOIN department_quadrant q USING (period, subset, department)
+            WHERE s.period = '{periodo}' AND s.department <> 'todos' GROUP BY 1""").fetchall() if abs(v - 1) > 1e-9]
+        repetidos = self.um(f"""SELECT count(*) FROM (SELECT subset, department FROM department_quadrant WHERE period = '{periodo}'
+                                GROUP BY 1, 2 HAVING count(*) <> 1 OR any_value(quadrant) NOT IN ('invest', 'keep', 'defend', 'review'))""")
+        if repetidos:
+            fora.append(f"{repetidos} departamento(s) fora de exatamente um quadrante")
+        return {"periodo": periodo, "proprio": len(proprio), "exportado": len(exp), "linhas_arquivo": len(exportadas), "iguais": iguais,
+                "primeira": primeira or (f"soma de share != 1 em {fora}" if fora else ""), "soma_share_ok": not fora}
+
+
+def pausas_populacao_inteira(cfg: dict) -> tuple[int, float]:
+    """O próprio SQL de crm_capacity com N = população inteira: a soma das probabilidades tem de dar o gabarito."""
+    con = conectar_duckdb(cfg)
+    try:
+        build.configurar_metricas(con, cfg)
+        con.execute(build.MACROS_SQL.read_text(encoding="utf-8"))
+        for nome in ("churn_score", "churn_test_score", "churn_features"):
+            registrar_delta(con, nome, caminho_tabela(cfg, "gold", build.MODELOS_LIDOS[nome]))
+        n = con.execute("SELECT count(*) FROM churn_score").fetchall()[0][0]
+        con.unregister("config_crm_capacity")
+        con.register("config_crm_capacity", pa.table({"capacity": pa.array([n], pa.int32())}))
+        sql = f"SELECT pauses_expected FROM ({build._sql_metrica('crm_capacity')}) WHERE method = 'model'"
+        return n, con.execute(sql).fetchall()[0][0]
+    finally:
+        con.close()
+
+
+def curva_modelo_regra(exportadas: list[dict]) -> list[tuple]:
+    """(capacidade, precisão do modelo, precisão da regra simples): registra quem fica acima, sem forçar (spec A1)."""
+    idx = {(l["capacidade"], l["metodo"]): l["precisao_historica"] for l in exportadas}
+    return [(n, idx[(n, "modelo")], idx[(n, "regra_simples")]) for n in sorted({c for c, _ in idx})]
+
+
+def caminho_2(cfg: dict) -> tuple[list[tuple], list[dict], dict]:
     c = Caminho2(cfg)
     calculados = c.gabaritos()
     linhas = []
@@ -265,8 +426,16 @@ def caminho_2(cfg: dict) -> tuple[list[tuple], list[dict]]:
         nome = f"faturamento_tempo_{p}.json"
         exportadas = expandir(json.loads((cfg["paths"]["export"] / nome).read_text(encoding="utf-8")))
         tempo.append(c.faturamento_tempo(p, exportadas))
+    crm = expandir(json.loads((cfg["paths"]["export"] / "acionamento_crm.json").read_text(encoding="utf-8")))
+    populacao, pausas = pausas_populacao_inteira(cfg)
+    gabarito = next(g for g in cfg["gold"]["conferencia"]["gabaritos"] if g["nome"] == "pausas_esperadas")
+    blocos = {"crm": c.crm(crm), "curva": curva_modelo_regra(crm),
+              "populacao": {"n": populacao, "pausas": pausas, "gabarito": gabarito["valor"],
+                            "ok": round(pausas, gabarito["casas"]) == gabarito["valor"]},
+              "quadrante": [c.quadrante(p, expandir(json.loads((cfg["paths"]["export"] / f"departamentos_quadrante_{p}.json").read_text(encoding="utf-8"))))
+                            for p, (_, _, tem_ano) in c.periodos.items() if tem_ano]}
     c.con.close()
-    return linhas, tempo
+    return linhas, tempo, blocos
 
 
 # ---------------------------------------------------------------- execução
@@ -297,7 +466,7 @@ def conferir(cfg: dict) -> int:
           f"diferenças sem explicação: {sum(len(r['sem_explicacao']) for r in c1)}")
 
     print("\nCaminho 2: gabaritos fixos por SQL próprio sobre a silver\n")
-    gabaritos, tempo = caminho_2(cfg)
+    gabaritos, tempo, blocos = caminho_2(cfg)
     print(f"{'gabarito':<32} {'esperado':>14} {'SQL próprio':>14} {'gold':>14}")
     for nome, e, p, g, ok in gabaritos:
         print(f"{nome:<32} {e!s:>14} {p!s:>14} {g!s:>14}  {'✅' if ok else '❌'}")
@@ -308,8 +477,30 @@ def conferir(cfg: dict) -> int:
         print(f"  {t['periodo']:<5} grão {t['ponto']:<4}  linhas: SQL próprio {t['proprio']:,}, exportado {t['exportado']:,}, "
               f"iguais {t['iguais']:,}  {'✅' if ok else '❌ ' + t['primeira']}")
 
+    print("\nBloco 1, acionamento_crm × SQL próprio (faturamento de 26 s direto da silver):")
+    pop = blocos["populacao"]
+    print(f"  pausas esperadas com N = população inteira ({pop['n']:,}): {pop['pausas']:.4f}; gabarito {pop['gabarito']}  {'✅' if pop['ok'] else '❌'}")
+    errados = [c for c in blocos["crm"] if not c["ok"]]
+    print(f"  conferências: {len(blocos['crm']) - len(errados)} de {len(blocos['crm'])} iguais")
+    for c in errados:
+        print(f"    ❌ {c['nome']}: SQL próprio {c['proprio']}, exportado {c['exportado']}")
+    for c in blocos["crm"]:
+        if c["nome"].startswith(("precisao modelo N=100", "precisao regra_simples N=100")):
+            print(f"  {c['nome']}: SQL próprio {c['proprio']}, exportado {c['exportado']}  {'✅' if c['ok'] else '❌'}")
+    print("  precisão no teste por capacidade (modelo × regra simples; informativo, não reprova):")
+    for n, modelo, regra in blocos["curva"]:
+        print(f"    N={n:<4} {modelo:.4f} × {regra:.4f}  {'modelo acima' if modelo > regra else 'empate' if modelo == regra else 'regra acima'}")
+    print(f"  modelo acima em {sum(1 for _, a, b in blocos['curva'] if a > b)} de {len(blocos['curva'])} capacidades")
+    print("\nBloco 2, departamentos_quadrante × montado a partir da venda:")
+    for q in blocos["quadrante"]:
+        ok = q["iguais"] == q["proprio"] == q["exportado"] == q["linhas_arquivo"] and q["soma_share_ok"]
+        print(f"  {q['periodo']:<4} linhas: SQL próprio {q['proprio']:,}, exportado {q['exportado']:,}, iguais {q['iguais']:,}; "
+              f"soma de share = 1 em todos os recortes: {'sim' if q['soma_share_ok'] else 'não'}  {'✅' if ok else '❌ ' + q['primeira']}")
+
     falhas = (sum(len(r["sem_explicacao"]) for r in c1) + sum(1 for l in gabaritos if not l[4])
-              + sum(1 for t in tempo if not t["iguais"] == t["proprio"] == t["exportado"]))
+              + sum(1 for t in tempo if not t["iguais"] == t["proprio"] == t["exportado"])
+              + len(errados) + (not pop["ok"])
+              + sum(1 for q in blocos["quadrante"] if not (q["iguais"] == q["proprio"] == q["exportado"] == q["linhas_arquivo"] and q["soma_share_ok"])))
     print(f"\n{'Conferência OK' if not falhas else f'Conferência com {falhas} problema(s) sem explicação'}")
     return 1 if falhas else 0
 

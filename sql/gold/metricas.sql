@@ -41,3 +41,22 @@ CREATE OR REPLACE MACRO index_vs_all(subset_value, all_value) AS 100 * subset_va
 
 -- Índice de um par = lift no subconjunto ÷ lift com todos os clientes (1 = igual).
 CREATE OR REPLACE MACRO lift_index(subset_lift, all_lift) AS subset_lift / all_lift;
+
+-- Bloco "Quem acionar" (G45). priority_score só ORDENA a fila do CRM: NÃO é o "dinheiro em risco" da G4 (department_risk).
+CREATE OR REPLACE MACRO priority_score(probability, revenue_26s) AS probability * revenue_26s;
+
+-- Valor original de uma variável gravada em log1p nas features (G21): log_value_26w -> faturamento de 26 s.
+CREATE OR REPLACE MACRO value_from_log1p(log_value) AS exp(log_value) - 1;
+
+-- precision@N = pausas reais entre os acionados ÷ acionados; recall@N = pausas reais entre os acionados ÷ pausas reais da foto.
+CREATE OR REPLACE MACRO precision_at_n(hits, acted) AS hits::DOUBLE / NULLIF(acted, 0);
+CREATE OR REPLACE MACRO recall_at_n(hits, pauses) AS hits::DOUBLE / NULLIF(pauses, 0);
+
+-- Bloco "Onde agir no mix" (G46). Valor igual ao corte conta como "acima".
+CREATE OR REPLACE MACRO quadrant_of(share_value, share_cut, growth_value, growth_cut) AS
+    CASE WHEN growth_value >= growth_cut THEN (CASE WHEN share_value >= share_cut THEN 'keep' ELSE 'invest' END)
+         ELSE (CASE WHEN share_value >= share_cut THEN 'defend' ELSE 'review' END) END;
+
+-- US$ abaixo (negativo) ou acima do crescimento do recorte = faturamento do ano anterior × (crescimento − corte).
+CREATE OR REPLACE MACRO gap_value(revenue_prior_year, growth_value, growth_cut) AS
+    revenue_prior_year::DOUBLE * (growth_value - growth_cut);

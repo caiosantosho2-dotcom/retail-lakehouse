@@ -166,8 +166,10 @@ gold:
       vizinhos_por_no: 10
       caracteristicos: 15
       concentracao: 0.80             # quantas subcategorias (e fabricantes) fazem 80% do faturamento
+  crm:                          # bloco "Quem acionar" (G45)
+    capacidades: [25, 50, 100, 150, 200, 300]   # N clientes que o CRM consegue acionar
   exportacao:                   # python -m src.gold.export (spec, seção 6)
-    versao_contrato: "5.0"
+    versao_contrato: "5.1"
     limite_bytes: 1572864       # 1,5 MB: o que o navegador baixa na abertura e em cada aba × período
   conferencia:                  # python -m src.gold.reconcile (spec, seção 8)
     # Caminho 2: gabaritos fixos, recalculados por SQL próprio direto da silver; comparados nas casas indicadas.
