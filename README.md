@@ -132,3 +132,7 @@ scripts/    espiar.py, para inspecionar tabelas pelo terminal
 notebooks/  perfil da bronze e tour do lakehouse
 docs/       decisões, specs e relatórios de validação
 ```
+
+## Licença
+
+O código está sob a [licença MIT](LICENSE). Ela não cobre os dados da Dunnhumby, que seguem os termos da fonte.
