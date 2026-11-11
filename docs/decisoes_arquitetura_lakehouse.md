@@ -457,6 +457,11 @@ retail-lakehouse/
 - **S17. `trans_time`:** convertido para `INTEGER`, depois `trans_hour = trans_time // 100` e `trans_minute = trans_time % 100`. É fora de faixa se for negativo, se a hora passar de 23 ou se o minuto passar de 59.
 - **S18. `dim_date` a partir dos dias com venda:** os 711 dias vêm da `fact_sales` (o `week_no` só existe no arquivo e não pode ser calculado). Um dia sem nenhuma venda não apareceria. Hoje são os 711.
 - **S19. Barra de progresso do DuckDB desligada em toda conexão** (`src.comum.conectar_duckdb`), não só no notebook.
+- **S20. Limite de órfãos na `fact_sales` (decisão do Caio, 11/11/2026; complementa a P2 e a S13).**
+  - Pela **P2**, o membro -1 absorve a venda cujo produto, loja ou cliente não está na dimensão, e o faturamento não muda. Isso vale **até o limite da P6 (1% das linhas da `fact_sales`)**, o mesmo `limite_rejeicao` do config, definido uma vez só.
+  - O build continua registrando `orfaos_produto`, `orfaos_loja` e `orfaos_cliente` no controle (`orfaos: true` no config). Se algum passar do limite, a `fact_sales` dá erro e o comando termina com 1.
+  - As contagens rodam **antes** de gravar, sobre a consulta. No erro, a tabela não é gravada e a versão anterior continua no lake (S13).
+  - Teste: `test_orfaos_acima_do_limite_param_a_silver` (1 órfã em 5 vendas = 20%: erro com limite de 10%, sucesso com 25%). Nos dados reais, são 0 órfãos.
 - **Achado (não é regra nova): `is_refund_discount`** dá **2** na `fact_sales`, e não os "2 / 10" esperados. As 10 linhas da bronze com `retail_disc > 0` são todas de mercadoria, e 8 delas têm `quantity = 0`: são rejeitadas (S9.1) antes de virar venda. O "10 (2 em mercadoria)" da S9.4 contava antes da regra da quantidade zero. A regra não foi mudada. **Resolvido pelo Caio em 29/10/2026:** esperado corrigido para "2 / 2" na S9.4 e no notebook. A conciliação 2 + 8 = 10 continua no notebook.
 - **Limitação conhecida (decidido pelo Caio em 29/10/2026): commodity `COUPON` conta como mercadoria.** São 3 produtos (AUTOMOTIVE, MEAT-WHSE, ELECT &PLUMBING), 68 vendas, US$ 459,66, fora da lista de não mercadoria da S9.2. Ficam como mercadoria **para bater com o gabarito do RAG** (US$ 7.376.322,37). Efeito: a mercadoria pode estar superestimada em até US$ 459,66 (0,006%). Se um dia entrarem na lista, a mercadoria passa a US$ 7.375.862,71 e a diferença com o RAG tem de ser registrada.
 
@@ -792,6 +797,13 @@ retail-lakehouse/
 
   - **Leitura:** a diferença é maior nas listas curtas e quase some em N = 300, onde, no objetivo `value`, as reais passam levemente das esperadas. São duas fotos, então isso descreve o teste, não é uma correção a aplicar: as pausas esperadas de "esta semana" continuam sendo a soma das probabilidades, sem ajuste.
 
+- **G50. Gold idêntica entre rodadas (decisão do Caio, 11/11/2026).**
+  - **Problema:** `crm_capacity.hist_value_caught_share` mudava no último bit entre rodadas (8 linhas, até 5,55 × 10⁻¹⁷). A causa é a soma de valores DOUBLE (faturamento de 26 s, que vem de `exp(...) - 1`) feita em paralelo, que muda de ordem de uma rodada para outra.
+  - **Decisão:** as somas de DOUBLE da gold são feitas em `DECIMAL(38,12)` e voltam a DOUBLE. A soma em DECIMAL é exata, então não depende da ordem. Só a `crm_capacity` soma DOUBLE: `pauses_expected`, `revenue_26s_at_stake`, `hist_value_caught`, `hist_value_caught_share` e `hist_pauses_expected`. As outras métricas somam `sales_value` (DECIMAL) ou contagens, que já eram exatas.
+  - **Por que não arredondar a 10 casas:** nos valores em US$ na casa dos milhares, a oscilação (~10⁻¹¹) fica perto do degrau de 10⁻¹⁰, e o arredondamento às vezes cairia para lados diferentes. O DECIMAL resolve sem esse risco.
+  - **Efeito:** cada parcela muda no máximo 5 × 10⁻¹³ (12 casas). A exportação não muda (42 de 43 arquivos, 20 de 20 gabaritos).
+  - **Conferido:** duas rodadas seguidas do pipeline deixam as 35 tabelas da gold idênticas (contagem e hash de todas as linhas).
+
 ## Grãos e dimensões (verificado em 11/11/2026)
 
 **Grãos da gold.** Cada chave é única e sem nulos nos dados reais (35 de 35 tabelas) e tem teste (`GRAOS` em `tests/test_gold.py`; uma tabela nova sem grão declarado faz o teste falhar).
@@ -834,4 +846,4 @@ retail-lakehouse/
 - **`'UNKNOWN'`:** produto cadastrado sem departamento ou commodity (S9.7, 15 produtos) e o membro -1 levam `'UNKNOWN'` na `dim_product`: é um produto que existe, só sem classificação.
 - **Nulo + `has_demographics`:** cliente fora da pesquisa demográfica tem as colunas de demografia nulas e `has_demographics = false` (P3, S9.10), para não se confundir com quem respondeu `Unknown` (S9.9).
 
-**Joins entre a fato e as dimensões na gold:** todos são `LEFT JOIN`. O único que era `JOIN` (`sql/gold/base/03_sales_item.sql`, fato × `calendar`, a `dim_date` sem o -1) virou `LEFT JOIN` em 11/11/2026, porque não há contagem de órfãos de data: um `day` fora da `dim_date` não pode sumir em silêncio. Nenhum número mudou: 34 de 35 tabelas da gold idênticas antes e depois (contagem e hash do conteúdo). A exceção, `crm_capacity`, difere só em `hist_value_caught_share`, em 8 linhas, por no máximo 5,55 × 10⁻¹⁷. Isso é oscilação de ponto flutuante que já existia: a versão nova é idêntica à de duas rodadas atrás (v4 = v6), e a v5, de antes da troca, já diferia da v4 no mesmo valor. A exportação arredonda e não muda (42 de 43 arquivos, 20 de 20 gabaritos). **Ponto de atenção:** a gold não é idêntica byte a byte entre rodadas nessa coluna; a idempotência vale nas casas exportadas.
+**Joins entre a fato e as dimensões na gold:** todos são `LEFT JOIN`. O único que era `JOIN` (`sql/gold/base/03_sales_item.sql`, fato × `calendar`, a `dim_date` sem o -1) virou `LEFT JOIN` em 11/11/2026, porque não há contagem de órfãos de data: um `day` fora da `dim_date` não pode sumir em silêncio. Nenhum número mudou: 34 de 35 tabelas da gold ficaram idênticas. A `crm_capacity` só tinha a oscilação de ponto flutuante que já existia (a nova versão era idêntica à de duas rodadas antes), resolvida na G50.

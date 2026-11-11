@@ -202,14 +202,30 @@ def construir_context(con: duckdb.DuckDBPyConnection, cfg: dict, item: dict, car
             registro["mensagem"] = f"chave {chave}: {nulas:,} nulas, {repetidas:,} repetidas; tabela não gravada"
             return registro
 
+    # Contagens (ex.: órfãos, P2) ANTES de gravar, sobre a consulta como view temporária com o nome da tabela: se os
+    # órfãos passarem do limite da P6, nada é gravado e a versão anterior fica no lake (S13).
+    nome = nome_curto(tabela)
+    con.execute(f"CREATE OR REPLACE TEMP VIEW {nome} AS {sql}")
+    try:
+        contagens = [(c, contar(con, c["sql"])) for c in item.get("contagens", [])]
+        total = contar(con, f"SELECT count(*) FROM {nome}") if any(c.get("orfaos") for c, _ in contagens) else 0
+    finally:
+        con.execute(f"DROP VIEW IF EXISTS {nome}")
+    mensagens = [f"{c['nome']}={n:,}" for c, n in contagens]
+    limite = float(cfg["silver"]["limite_rejeicao"])
+    acima = [f"{c['nome']} {n / total:.2%}" for c, n in contagens if c.get("orfaos") and total and n / total > limite]
+    if acima:
+        registro["mensagem"] = (f"órfãos acima do limite de {limite:.0%}: {', '.join(acima)}; tabela não gravada; "
+                                + ", ".join(mensagens))
+        return registro
+
     destino = caminho_tabela(cfg, "silver", f"context/{tabela}")
     gravar(con, cfg, sql, destino)
-    registrar_delta(con, nome_curto(tabela), destino)  # as próximas consultas leem o que foi gravado
-    saida = contar(con, f"SELECT count(*) FROM {nome_curto(tabela)}")
+    registrar_delta(con, nome, destino)  # as próximas consultas leem o que foi gravado
+    saida = contar(con, f"SELECT count(*) FROM {nome}")
     registro["linhas_saida"] = saida
 
-    mensagens = [f"{c['nome']}={contar(con, c['sql']):,}" for c in item.get("contagens", [])]
-    if nome_curto(tabela).startswith("fact_"):
+    if nome.startswith("fact_"):
         # O fato tem o grão da clean de origem: nenhuma linha pode sumir nem duplicar nas junções.
         entrada = contar(con, "SELECT count(*) FROM clean_transaction_data")
         registro["linhas_entrada"] = entrada

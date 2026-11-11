@@ -10,6 +10,8 @@
 -- (churn_features, G21), sem nada posterior à foto.
 -- Calibração no teste (G49, só model): soma das probabilidades dos N primeiros e pausas reais entre eles, média das fotos.
 -- Se a população for menor que N, acionam-se todos: "N primeiros" = quem existe.
+-- Somas de valores DOUBLE (probabilidade, faturamento de 26 s) em DECIMAL(38,12) e de volta a DOUBLE: a soma em DECIMAL
+-- é exata e não depende da ordem das threads, então a tabela sai idêntica byte a byte entre rodadas (G50).
 WITH objectives AS (
     SELECT unnest(['pauses', 'value']) AS objective
 ),
@@ -26,7 +28,8 @@ final_rank AS (
     FROM final_base
 ),
 this_week AS (
-    SELECT c.capacity, r.objective, sum(r.probability) AS pauses_expected, sum(r.revenue_26s) AS revenue_26s_at_stake
+    SELECT c.capacity, r.objective, sum(r.probability::DECIMAL(38, 12))::DOUBLE AS pauses_expected,
+           sum(r.revenue_26s::DECIMAL(38, 12))::DOUBLE AS revenue_26s_at_stake
     FROM config_crm_capacity c JOIN final_rank r ON r.position <= c.capacity
     GROUP BY c.capacity, r.objective
 ),
@@ -75,10 +78,11 @@ by_snapshot AS (
            precision_at_n(sum(r.label) FILTER (WHERE r.position <= c.capacity), count(*) FILTER (WHERE r.position <= c.capacity)) AS hist_precision,
            recall_at_n(sum(r.label) FILTER (WHERE r.position <= c.capacity), sum(r.label)) AS hist_pauses_caught_share,
            -- Nenhuma pausa real entre os N vale zero, não nulo.
-           coalesce(sum(r.revenue_26s) FILTER (WHERE r.label = 1 AND r.position <= c.capacity), 0) AS hist_value_caught,
-           share(coalesce(sum(r.revenue_26s) FILTER (WHERE r.label = 1 AND r.position <= c.capacity), 0),
-                 sum(r.revenue_26s) FILTER (WHERE r.label = 1)) AS hist_value_caught_share,
-           sum(r.model_score) FILTER (WHERE r.position <= c.capacity) AS hist_pauses_expected,
+           coalesce(sum(r.revenue_26s::DECIMAL(38, 12)) FILTER (WHERE r.label = 1 AND r.position <= c.capacity), 0)::DOUBLE
+               AS hist_value_caught,
+           share(coalesce(sum(r.revenue_26s::DECIMAL(38, 12)) FILTER (WHERE r.label = 1 AND r.position <= c.capacity), 0)::DOUBLE,
+                 (sum(r.revenue_26s::DECIMAL(38, 12)) FILTER (WHERE r.label = 1))::DOUBLE) AS hist_value_caught_share,
+           (sum(r.model_score::DECIMAL(38, 12)) FILTER (WHERE r.position <= c.capacity))::DOUBLE AS hist_pauses_expected,
            sum(r.label) FILTER (WHERE r.position <= c.capacity) AS hist_pauses_actual
     FROM config_crm_capacity c CROSS JOIN test_rank r
     GROUP BY ALL

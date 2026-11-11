@@ -248,6 +248,25 @@ def test_grao_da_fact_sales_e_produto_na_cesta(cfg):
     assert linhas_ == pares == 4 and nulos == 0
 
 
+@pytest.mark.parametrize("limite,codigo", [(0.10, 1), (0.25, 0)])
+def test_orfaos_acima_do_limite_param_a_silver(config, limite, codigo):
+    """Órfãos (P2) acima do limite da P6 são erro e a fact_sales não é gravada (S13); abaixo, o membro -1 absorve."""
+    escrever(Path(config).parent / "raw", "transaction_data.csv", TRANSACOES[:6])   # as 5 válidas, 1 órfã = 20%
+    cfg = preparar(config, limite_rejeicao=limite)
+    assert build.executar(cfg, agora=AGORA) == codigo
+    reg = {r["tabela"]: r for r in controle(cfg)}
+    assert reg["clean/transaction_data"]["linhas_rejeitadas"] == 0
+    fato = reg["context/sales/fact_sales"]
+    assert "orfaos_produto=1" in fato["mensagem"] and "orfaos_loja=0" in fato["mensagem"]   # contagem continua
+    if codigo:
+        assert fato["status"] == "erro"
+        assert f"órfãos acima do limite de {limite:.0%}: orfaos_produto 20.00%; tabela não gravada" in fato["mensagem"]
+        assert not caminho_tabela(cfg, "silver", "context/sales/fact_sales").exists()
+    else:
+        assert fato["status"] == "sucesso" and "acima do limite" not in fato["mensagem"]
+        assert len(linhas(cfg, "context/sales/fact_sales")) == 5
+
+
 @pytest.mark.parametrize("tabela,chave", [
     ("product/dim_product", "product_id"), ("sales/dim_store", "store_id"),
     ("customer/dim_household", "household_key"), ("shared/dim_date", "day"),

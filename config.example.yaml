@@ -133,9 +133,10 @@ silver:
       sql: sql/silver/fact_sales.sql
       chave: []
       contagens:                # registradas no controle depois de gravar (P2: órfãos esperados = 0)
-        - {nome: orfaos_produto, sql: "SELECT count(*) FROM fact_sales WHERE product_id = -1"}
-        - {nome: orfaos_loja, sql: "SELECT count(*) FROM fact_sales WHERE store_id = -1"}
-        - {nome: orfaos_cliente, sql: "SELECT count(*) FROM fact_sales WHERE household_key = -1"}
+        # orfaos: true -> mais que limite_rejeicao (P6) das linhas do fato e erro; abaixo, o membro -1 absorve (P2)
+        - {nome: orfaos_produto, orfaos: true, sql: "SELECT count(*) FROM fact_sales WHERE product_id = -1"}
+        - {nome: orfaos_loja, orfaos: true, sql: "SELECT count(*) FROM fact_sales WHERE store_id = -1"}
+        - {nome: orfaos_cliente, orfaos: true, sql: "SELECT count(*) FROM fact_sales WHERE household_key = -1"}
 
 # Gold (spec da fase 3). Parada 3a: só o que a base comum e os modelos usam; períodos e cubos entram na 3b.
 gold:
