@@ -211,6 +211,43 @@ def test_orfao_aponta_para_desconhecido_e_e_contado(cfg):
     assert "orfaos_produto=1" in reg["mensagem"] and "orfaos_loja=0" in reg["mensagem"]
 
 
+def test_faturamento_por_is_merchandise_fecha_com_o_total(config):
+    """true + false + nulo = total (S12): a venda órfã (produto -1) não é mercadoria nem não mercadoria, cai no nulo."""
+    escrever(Path(config).parent / "raw", "transaction_data.csv",
+             TRANSACOES + ["4,103,8,98,1,10.00,503,0,1000,2,0,0"])   # órfã de US$ 10 (produto 98 sem cadastro)
+    cfg = preparar(config)
+    assert build.executar(cfg, agora=AGORA) == 0
+    con = conectar_duckdb(cfg)
+    con.register("fato", ler(cfg, "context/sales/fact_sales"))
+    verdadeiro, falso, nulo, total = con.execute("""
+        SELECT sum(sales_value) FILTER (WHERE is_merchandise = true),
+               sum(sales_value) FILTER (WHERE is_merchandise = false),
+               sum(sales_value) FILTER (WHERE is_merchandise IS NULL),
+               sum(sales_value)
+        FROM fato""").fetchall()[0]
+    orfa = con.execute("SELECT product_id, is_merchandise FROM fato WHERE basket_id = 103").fetchall()
+    assert orfa == [(-1, None)]
+    assert nulo == Decimal("10.0000")                        # a órfã de 10 + a de ruído (0) da base mínima
+    assert (verdadeiro, falso) == (Decimal("2.5000"), Decimal("31.0000"))
+    assert verdadeiro + falso + nulo == total == Decimal("43.5000")
+
+
+def test_grao_da_fact_sales_e_produto_na_cesta(cfg):
+    """Grão da fact_sales: um produto numa cesta, chave basket_id + product_id (achado de 11/11/2026, S9).
+
+    Exclui product_id = -1: duas vendas órfãs na mesma cesta (dois produtos sem cadastro) virariam o mesmo par
+    (cesta, -1) por causa do membro desconhecido, sem que o dado de origem tenha repetição. Os órfãos são vigiados à
+    parte pela contagem de órfãos da silver (orfaos_produto no controle, esperado 0 nos dados reais, P2).
+    """
+    con = conectar_duckdb(cfg)
+    con.register("fato", ler(cfg, "context/sales/fact_sales"))
+    linhas_, pares, nulos = con.execute("""
+        SELECT count(*), count(DISTINCT (basket_id, product_id)),
+               count(*) FILTER (WHERE basket_id IS NULL OR product_id IS NULL)
+        FROM fato WHERE product_id <> -1""").fetchall()[0]
+    assert linhas_ == pares == 4 and nulos == 0
+
+
 @pytest.mark.parametrize("tabela,chave", [
     ("product/dim_product", "product_id"), ("sales/dim_store", "store_id"),
     ("customer/dim_household", "household_key"), ("shared/dim_date", "day"),

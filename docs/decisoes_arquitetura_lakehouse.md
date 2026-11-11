@@ -438,6 +438,8 @@ retail-lakehouse/
 - Não mercadoria na `fact_sales`: **32.604** linhas, US$ **681.121,43**.
 - Total na `fact_sales`: US$ **8.057.443,80** (= 8.057.463,08 da bronze − 19,28 das rejeitadas).
 
+**Achado (verificado em 11/11/2026; decisão do Caio): grão da `fact_sales` = um produto numa cesta, chave `basket_id` + `product_id`.** `COUNT(*)` = **2.581.266** e pares distintos (`basket_id`, `product_id`) = **2.581.266**, diferença 0 (contado em 10 faixas de `basket_id % 10`, todas com diferença 0, por causa da memória). Teste: `test_grao_da_fact_sales_e_produto_na_cesta`, que exclui `product_id = -1`, porque duas vendas órfãs na mesma cesta virariam o mesmo par (cesta, -1) pelo membro desconhecido. Os órfãos são vigiados pela contagem `orfaos_produto` (P2, esperado 0). A `chave` da `fact_sales` no config continua vazia: o grão é conferido por teste, não pelo build.
+
 ### Decisões tomadas na construção da fase 2 (28/10/2026, sem supervisão; a opção mais conservadora em cada dúvida)
 > Tomadas pelo Claude durante a construção noturna, seguindo a spec (`docs/spec_fase2_silver.md`). Revisar.
 
@@ -789,3 +791,47 @@ retail-lakehouse/
     | 300 | 81,35 | 80,5 | 41,11 | 41,5 |
 
   - **Leitura:** a diferença é maior nas listas curtas e quase some em N = 300, onde, no objetivo `value`, as reais passam levemente das esperadas. São duas fotos, então isso descreve o teste, não é uma correção a aplicar: as pausas esperadas de "esta semana" continuam sendo a soma das probabilidades, sem ajuste.
+
+## Grãos e dimensões (verificado em 11/11/2026)
+
+**Grãos da gold.** Cada chave é única e sem nulos nos dados reais (35 de 35 tabelas) e tem teste (`GRAOS` em `tests/test_gold.py`; uma tabela nova sem grão declarado faz o teste falhar).
+
+| Grão | Chave | Tabelas |
+|---|---|---|
+| cliente | `household_key` | `features/customer_rfm_features`, `models/customer_segment`, `models/churn_score`, `metrics/customer_group` |
+| cliente × foto | `household_key`, `snapshot_week` | `features/churn_features`, `models/churn_test_score` |
+| cliente × janela de gasto | `household_key`, `spend_window` | `features/clv_features` |
+| segmento | `segment` | `models/rfm_segment_profile`, `models/clv_segment`, `models/discount_test_segment` |
+| par de segmentos | `segment_a`, `segment_b` | `models/discount_test_pair` |
+| k / classificador / ponto da curva | `k` · `classifier` · `classifier`, `point` | `models/rfm_k_evaluation` · `models/churn_classifier` · `models/churn_roc` |
+| modelo × chave | `model`, `key` | `models/model_summary` |
+| período | `period` | `metrics/dim_period` |
+| período × loja | `period`, `store_id` | `metrics/period_comparable_store` |
+| subconjunto × segmento | `subset`, `segment` | `metrics/segment_subset` |
+| período × segmento × departamento | `period`, `segment`, `department` | `metrics/cube_period` |
+| período × ponto × segmento × departamento | `period`, `point`, `segment`, `department` | `metrics/revenue_over_time` |
+| departamento | `department` | `metrics/department` |
+| período × departamento | `period`, `department` | `metrics/department_profile` |
+| período × departamento × subcategoria | `period`, `department`, `subcategory` | `metrics/subcategory_top` |
+| período × subconjunto | `period`, `subset` | `metrics/concentration` |
+| período × subconjunto × departamento | `period`, `subset`, `department` | `metrics/kpi_filtered`, `metrics/department_segment`, `metrics/department_risk`, `metrics/brand`, `metrics/department_quadrant` |
+| período × subconjunto × departamento × par de subcategorias | `period`, `subset`, `department`, `subcategory_a`, `subcategory_b` | `metrics/basket_pair` |
+| nó | `node` | `metrics/network_node` |
+| período × subconjunto × par de nós | `period`, `subset`, `node_a`, `node_b` | `metrics/network_link`, `metrics/network_characteristic` |
+| período × subconjunto × nó × vizinho | `period`, `subset`, `node`, `other` | `metrics/network_neighbor` |
+| capacidade × objetivo × método | `capacity`, `objective`, `method` | `metrics/crm_capacity` |
+
+**Matriz de barramento** (quais dimensões cada fato usa; `dim_date` é a conformada):
+
+| Fato | `dim_date` | `dim_household` | `dim_product` | `dim_store` | `dim_campaign` | Situação |
+|---|:---:|:---:|:---:|:---:|:---:|---|
+| `fact_sales` | ✔ (`day`) | ✔ | ✔ | ✔ | | hoje |
+| `fact_campaign_received` | pela `dim_campaign` (início e fim) | ✔ | | | ✔ | planejada (S7) |
+| `fact_coupon_redemption` | ✔ (`day` do resgate); a data da campanha pela `dim_campaign` | ✔ | pela `bridge_coupon_product` | | ✔ | planejada (S7) |
+
+**Os "desconhecidos":**
+- **Membro -1:** venda cujo produto, loja ou cliente não está na dimensão aponta para o id -1, em vez de ser rejeitada (P2); o órfão é contado no controle (esperado 0). No -1 da `dim_product`, `is_merchandise` é nulo (S12); na `dim_date`, todas as colunas do -1 são nulas.
+- **`'UNKNOWN'`:** produto cadastrado sem departamento ou commodity (S9.7, 15 produtos) e o membro -1 levam `'UNKNOWN'` na `dim_product`: é um produto que existe, só sem classificação.
+- **Nulo + `has_demographics`:** cliente fora da pesquisa demográfica tem as colunas de demografia nulas e `has_demographics = false` (P3, S9.10), para não se confundir com quem respondeu `Unknown` (S9.9).
+
+**Joins entre a fato e as dimensões na gold:** todos são `LEFT JOIN`. O único que era `JOIN` (`sql/gold/base/03_sales_item.sql`, fato × `calendar`, a `dim_date` sem o -1) virou `LEFT JOIN` em 11/11/2026, porque não há contagem de órfãos de data: um `day` fora da `dim_date` não pode sumir em silêncio. Nenhum número mudou: 34 de 35 tabelas da gold idênticas antes e depois (contagem e hash do conteúdo). A exceção, `crm_capacity`, difere só em `hist_value_caught_share`, em 8 linhas, por no máximo 5,55 × 10⁻¹⁷. Isso é oscilação de ponto flutuante que já existia: a versão nova é idêntica à de duas rodadas atrás (v4 = v6), e a v5, de antes da troca, já diferia da v4 no mesmo valor. A exportação arredonda e não muda (42 de 43 arquivos, 20 de 20 gabaritos). **Ponto de atenção:** a gold não é idêntica byte a byte entre rodadas nessa coluna; a idempotência vale nas casas exportadas.

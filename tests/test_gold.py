@@ -84,6 +84,61 @@ def resumo(con, modelo: str, chave: str):
     return json.loads(um(con, f"SELECT value FROM model_summary WHERE model = '{modelo}' AND key = '{chave}'")[0])
 
 
+# ---------------------------------------------------------------- grãos (seção "Grãos e dimensões" das decisões)
+
+# Chave de cada tabela da gold. Conferidos nos dados reais em 11/11/2026 (linhas = chaves distintas, 0 nulos).
+GRAOS = {
+    "features/customer_rfm_features": ["household_key"],
+    "features/churn_features": ["household_key", "snapshot_week"],                 # cliente × foto
+    "features/clv_features": ["household_key", "spend_window"],                    # cliente × janela de gasto
+    "models/customer_segment": ["household_key"],
+    "models/rfm_k_evaluation": ["k"],
+    "models/rfm_segment_profile": ["segment"],
+    "models/churn_score": ["household_key"],
+    "models/churn_test_score": ["household_key", "snapshot_week"],
+    "models/churn_classifier": ["classifier"],
+    "models/churn_roc": ["classifier", "point"],
+    "models/clv_segment": ["segment"],
+    "models/discount_test_pair": ["segment_a", "segment_b"],
+    "models/discount_test_segment": ["segment"],
+    "models/model_summary": ["model", "key"],
+    "metrics/dim_period": ["period"],
+    "metrics/period_comparable_store": ["period", "store_id"],
+    "metrics/customer_group": ["household_key"],
+    "metrics/segment_subset": ["subset", "segment"],
+    "metrics/cube_period": ["period", "segment", "department"],
+    "metrics/department": ["department"],
+    "metrics/revenue_over_time": ["period", "point", "segment", "department"],
+    "metrics/kpi_filtered": ["period", "subset", "department"],
+    "metrics/department_segment": ["period", "subset", "department"],
+    "metrics/department_profile": ["period", "department"],
+    "metrics/department_risk": ["period", "subset", "department"],
+    "metrics/subcategory_top": ["period", "department", "subcategory"],
+    "metrics/concentration": ["period", "subset"],
+    "metrics/brand": ["period", "subset", "department"],
+    "metrics/basket_pair": ["period", "subset", "department", "subcategory_a", "subcategory_b"],
+    "metrics/network_node": ["node"],
+    "metrics/network_link": ["period", "subset", "node_a", "node_b"],
+    "metrics/network_neighbor": ["period", "subset", "node", "other"],
+    "metrics/network_characteristic": ["period", "subset", "node_a", "node_b"],
+    "metrics/crm_capacity": ["capacity", "objective", "method"],                   # v4.1
+    "metrics/department_quadrant": ["period", "subset", "department"],            # v4.1
+}
+
+
+def test_toda_tabela_da_gold_tem_grao_declarado():
+    assert sorted(GRAOS) == sorted(TODAS)
+
+
+@pytest.mark.parametrize("tabela", sorted(GRAOS))
+def test_grao_unico_e_sem_nulos(con, tabela):
+    nome, chave = tabela.split("/")[1], GRAOS[tabela]
+    nulos = " OR ".join(f"{c} IS NULL" for c in chave)
+    linhas, distintas, com_nulo = um(con, f"""
+        SELECT count(*), count(DISTINCT ({', '.join(chave)})), count(*) FILTER (WHERE {nulos}) FROM {nome}""")
+    assert linhas > 0 and linhas == distintas and com_nulo == 0, (linhas, distintas, com_nulo)
+
+
 # ---------------------------------------------------------------- base comum
 
 def test_janela_termina_na_ultima_semana_completa(con):
